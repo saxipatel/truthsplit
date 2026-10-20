@@ -1,0 +1,84 @@
+name: truthsplit
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${APP_DB_USER:?set APP_DB_USER in .env}
+      POSTGRES_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}
+      POSTGRES_DB: ${APP_DB_NAME:?set APP_DB_NAME in .env}
+    ports:
+      - "127.0.0.1:${APP_DB_PORT:-5433}:5432"
+    volumes:
+      - app-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${APP_DB_USER:?set APP_DB_USER in .env} -d ${APP_DB_NAME:?set APP_DB_NAME in .env}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Stand-in for an external reporting database. The backend only ever connects as SOURCE_READER_USER.
+  source-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: source_admin
+      POSTGRES_PASSWORD: ${SOURCE_DB_ADMIN_PASSWORD:?set SOURCE_DB_ADMIN_PASSWORD in .env}
+      POSTGRES_DB: ${SOURCE_DB_NAME:?set SOURCE_DB_NAME in .env}
+      SOURCE_READER_USER: ${SOURCE_READER_USER:?set SOURCE_READER_USER in .env}
+      SOURCE_READER_PASSWORD: ${SOURCE_READER_PASSWORD:?set SOURCE_READER_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${SOURCE_DB_PORT:-5434}:5432"
+    volumes:
+      - source-db:/var/lib/postgresql/data
+      - ./docker/source-db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U source_admin -d ${SOURCE_DB_NAME:?set SOURCE_DB_NAME in .env}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment:
+      TRUTHSPLIT_DATABASE_URL: postgresql+psycopg://${APP_DB_USER:?set APP_DB_USER in .env}:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@db:5432/${APP_DB_NAME:?set APP_DB_NAME in .env}
+      TRUTHSPLIT_SOURCE_DEMO_URL: postgresql+psycopg://${SOURCE_READER_USER:?set SOURCE_READER_USER in .env}:${SOURCE_READER_PASSWORD:?set SOURCE_READER_PASSWORD in .env}@source-db:5432/${SOURCE_DB_NAME:?set SOURCE_DB_NAME in .env}
+      TRUTHSPLIT_ALLOWED_SOURCE_HOSTS: ${TRUTHSPLIT_ALLOWED_SOURCE_HOSTS:-source-db}
+      TRUTHSPLIT_MAX_UPLOAD_MB: ${TRUTHSPLIT_MAX_UPLOAD_MB:-25}
+      TRUTHSPLIT_MAX_ROWS: ${TRUTHSPLIT_MAX_ROWS:-250000}
+      TRUTHSPLIT_STATEMENT_TIMEOUT_MS: ${TRUTHSPLIT_STATEMENT_TIMEOUT_MS:-5000}
+      TRUTHSPLIT_LOG_LEVEL: ${TRUTHSPLIT_LOG_LEVEL:-INFO}
+      TRUTHSPLIT_STORAGE_DIR: /data/storage
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - storage:/data/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      source-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  frontend:
+    build: ./frontend
+    environment:
+      API_PROXY_TARGET: http://backend:8000
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5173/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  app-db:
+  source-db:
+  storage:

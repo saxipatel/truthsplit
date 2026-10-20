@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+node_modules/
+dist/
+frontend/test-results/
+frontend/playwright-report/
+e2e/test-results/
+e2e/playwright-report/
+var/
+.DS_Store
