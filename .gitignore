@@ -14,3 +14,5 @@ e2e/test-results/
 e2e/playwright-report/
 var/
 .DS_Store
+*.egg-info/
+build/
