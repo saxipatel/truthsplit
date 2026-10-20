@@ -129,3 +129,73 @@ Each entry records a decision made while building TruthSplit, the context for it
 **Trade-offs.** A value whose stored double is not a short decimal (for example the result of floating-point arithmetic, `0.30000000000000004`) is rejected as having too many decimal places, even if the spreadsheet displays it rounded. This is visible and explained rather than silently rounded.
 
 **Consequences.** CSV and XLSX copies of the same data normalize to identical records. This was verified on 100k rows.
+
+## 10. Python reference evaluator, with SQL as an independent proof
+
+**Decision.** Metric definitions are evaluated in Python over in-memory records (`app/comparison/metrics.py`). Each is also rendered as one SQL query over `dataset_records` (`app/comparison/sql.py`), which is stored with the investigation and tested to return the same value.
+
+**Context.** Findings need per-record contributions as evidence, and every number must be reproducible by someone who doesn't trust the engine.
+
+**Alternatives.** Only SQL (aggregate in PostgreSQL); only Python.
+
+**Reason.** The Python evaluator keeps, for each record, the value it contributes or the reason it was excluded, which the per-key reconciliation and the evidence need. The SQL form is what a reviewer can run, and agreement between two independent implementations is a meaningful test. It is checked on 18 definitions covering every filter operator, refund policy, grain, window, timezone and aggregation.
+
+**Trade-offs.** Two implementations of the same rules must change together; the parity test fails if they drift. Investigations load both datasets into memory (bounded by the 250k row limit).
+
+**Consequences.** Filter semantics follow SQL: a comparison against a null field is never true, including `ne` and `not_in`.
+
+## 11. Exact partition of the difference by business key, in a fixed order
+
+**Decision.** With delta = right − left, contributions are grouped by business key and each key's difference is assigned, in order, to: extra (key only on the right), missing (only on the left), exact duplicates (identical raw rows beyond the first, on matched keys), and amount mismatch (the rest of a matched key). Rows without a key form a separate, unexplained part.
+
+**Context.** The sum of explanations must equal the observed difference, with nothing counted twice.
+
+**Alternatives.** Compute each check independently and report the overlaps; pair rows within a key one to one.
+
+**Reason.** Since each metric equals the sum of its contributions, grouping by key splits delta exactly in `Decimal` arithmetic. The engine asserts `Σ categories == delta` on every run. Pairing rows within a key would have to guess which row corresponds to which, so totals are compared per key instead.
+
+**Trade-offs.** The order matters: a missing key that was also duplicated is reported only as missing. Repeated keys that aren't byte-identical (several order lines, or join fan-out) fall into amount mismatch at this level. The Difference Autopsy is responsible for recognising join amplification.
+
+**Consequences.** These are data-level findings. They say which records differ, not why. A missing key's evidence records whether the key is absent from the other dataset or present but excluded by that side's definition (`other_side: excluded:filtered`), so definition differences aren't reported as lost data.
+
+## 12. Evidence status of data-level findings
+
+**Decision.** Missing, extra, duplicate and mismatch findings are `confirmed` because their amounts are recomputed exactly from listed records. Non-unique keys are `suspected`, with no amount. Rows without a business key are `unexplained`.
+
+**Context.** The blueprint reserves "confirmed" for reproducible proof, and forbids invented confidence scores.
+
+**Reason.** What these findings claim (these records differ by this much) is fully proven. Each finding's `classification_reason` states that the cause is not established, so "confirmed" never overstates the claim.
+
+**Consequences.** `explained_delta + unexplained_delta = baseline_delta` always. Root-cause findings come later and add their own rules.
+
+## 13. ANALYZE after each import
+
+**Decision.** `ANALYZE dataset_records` runs after every dataset import commits.
+
+**Context.** A cross-check query joining two freshly COPY-loaded 100k-row datasets ran for over 2 minutes with stale statistics, and in 0.9 s after `ANALYZE`.
+
+**Alternatives.** Rely on autovacuum (it runs, but not necessarily before the next query); analyze only before investigations.
+
+**Reason.** Bulk loads are exactly when statistics go stale, and the import is the one place that knows a large change just happened. The measured import time was unchanged, at about 1.8 s per 100k CSV rows.
+
+**Trade-offs.** It analyzes the whole table, not just the new dataset. On a much larger table it would be worth sampling or moving off the request path.
+
+## 14. Refuse definitions that read columns the dataset doesn't map
+
+**Decision.** Before evaluating, each side's definition is checked against its dataset's column mapping (`unmapped_fields`). A definition that needs an unmapped column fails with a message naming the column. That covers a sum's value column, a refund column for any non-gross refund policy, a timestamp for a date window, a business key for key grain or count_distinct, and any filtered field.
+
+**Context.** Found during Milestone 3 verification. Unmapped columns are null in every record, and the evaluator's null semantics then produce plausible but wrong numbers: net-of-refunds equals gross, and a filtered or windowed metric is zero.
+
+**Alternatives.** Evaluate anyway and add a warning to the investigation.
+
+**Reason.** A warning beside a wrong total is easy to miss, and the total would flow into findings and reports. Refusing is cheap, and the fix (map the column, or use a different definition) is clear.
+
+**Consequences.** A shared definition can't be applied to a dataset that lacks one of its columns. A definition variant without that dependency has to be created explicitly, which makes the difference in Metric DNA visible.
+
+## 15. Per-key evidence amounts use the total type
+
+**Decision.** `evidence_records.left_amount` and `right_amount` are numeric(24,4), like investigation totals (migration `0002`).
+
+**Context.** They hold per-key totals, not single record values, so a key with several large rows overflowed numeric(18,4), as found in verification.
+
+**Consequences.** Record-level columns stay numeric(18,4), matching the normalized record contract. Every column that holds a sum is numeric(24,4).

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from psycopg.types.json import Jsonb
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -209,6 +209,10 @@ def create_dataset(
         return ImportOutcome(
             session.scalar(select(Dataset).where(Dataset.fingerprint == fingerprint)), created=False
         )
+    # Planner statistics are stale right after a bulk COPY. Without this, ad-hoc and proof queries over a
+    # fresh dataset can pick nested-loop plans (measured: >2 min instead of <1 s on 2 x 100k rows).
+    session.execute(text("ANALYZE dataset_records"))
+    session.commit()
     log.info(
         "dataset imported",
         extra={

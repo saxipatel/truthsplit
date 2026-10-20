@@ -1,10 +1,12 @@
 import pytest
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db.session import get_session
 from app.main import app
+from tests.conftest import alembic_config
 
 
 def client_with(session_factory) -> TestClient:
@@ -30,7 +32,8 @@ def test_ready_reports_schema_revision(db_session: Session):
     client = client_with(lambda: db_session)
     resp = client.get("/health/ready")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok", "database": "ok", "schema_revision": "0001"}
+    head = ScriptDirectory.from_config(alembic_config("unused")).get_current_head()
+    assert resp.json() == {"status": "ok", "database": "ok", "schema_revision": head}
 
 
 def test_ready_is_503_when_database_unreachable():

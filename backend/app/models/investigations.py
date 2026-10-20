@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, Money, Total, created_at, enum_column, uuid_pk
+from app.models.base import Base, Total, created_at, enum_column, uuid_pk
 from app.models.metrics import MetricDefinition
 from app.models.sources import Dataset
 
@@ -181,8 +181,9 @@ class EvidenceRecord(Base):
     )
     source_record_id: Mapped[str | None] = mapped_column(sa.String(255))
     business_key: Mapped[str | None] = mapped_column(sa.String(255))
-    left_amount: Mapped[Decimal | None] = mapped_column(Money)
-    right_amount: Mapped[Decimal | None] = mapped_column(Money)
+    # Per-key totals can exceed a single record's numeric(18,4), so these use the total type.
+    left_amount: Mapped[Decimal | None] = mapped_column(Total)
+    right_amount: Mapped[Decimal | None] = mapped_column(Total)
     contribution: Mapped[Decimal | None] = mapped_column(Total)
     detail: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 
