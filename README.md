@@ -2,7 +2,7 @@
 
 TruthSplit investigates why two reports of the same business metric disagree. It explains the gap between them with record-level evidence and reports whatever it cannot explain as an unexplained remainder.
 
-**Status: in development.** In place so far: the Docker Compose stack, PostgreSQL schema and migrations, health checks, the file import API (CSV / XLSX / XLS upload, preview, column mapping, normalization), the comparison engine (metric definitions, record-level reconciliation, investigations with evidence), and read-only PostgreSQL sources (registered queries snapshotted into datasets, so files and queries can be compared in any combination). Root-cause diagnosis, simulation, reports and most of the UI are not built yet.
+**Status: in development.** In place so far: the Docker Compose stack, PostgreSQL schema and migrations, health checks, the file import API (CSV / XLSX / XLS upload, preview, column mapping, normalization), the comparison engine (metric definitions, record-level reconciliation, investigations with evidence), read-only PostgreSQL sources (registered queries snapshotted into datasets, so files and queries can be compared in any combination), and the Difference Autopsy (definition replay, join amplification, cutoff and refund rules, evidence status). Simulation, investigation memory, reports and most of the UI are not built yet.
 
 ## Running locally
 
@@ -37,6 +37,7 @@ The backend container runs `alembic upgrade head` before it starts.
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` / `GET` | `/api/metric-definitions` | Create the next version of a named metric definition; list definitions. |
+| `GET` | `/api/metric-definitions/compare?left=&right=` | Metric DNA: two definitions side by side, with differences marked. |
 | `POST` | `/api/investigations` | Evaluate two (dataset, definition) inputs, reconcile them and store the result. |
 | `GET` | `/api/investigations`, `/api/investigations/{id}` | Stored investigations with totals, key statistics and findings. |
 | `GET` | `/api/investigations/{id}/findings/{finding_id}/evidence` | Per-key evidence with source row numbers, paginated. |
@@ -62,7 +63,15 @@ Snapshots are ordinary datasets, so `POST /api/investigations` compares any two 
 make seed-source
 ```
 
-Parsing and validation rules are in [docs/metric-contract.md](docs/metric-contract.md). Measured import times are in [docs/verification-report.md](docs/verification-report.md).
+How differences are attributed, and what `confirmed`, `suspected` and `unexplained` mean, is in [docs/difference-autopsy.md](docs/difference-autopsy.md). Parsing and validation rules are in [docs/metric-contract.md](docs/metric-contract.md). Measured import times are in [docs/verification-report.md](docs/verification-report.md).
+
+## Demo
+
+```bash
+make demo
+```
+
+This loads two **synthetic** investigations into the running stack: one fully explained by refund treatment, join duplication and reporting cutoffs, and one with an unexplained remainder. Their expected results are in [`sample_data/manifest.json`](sample_data/manifest.json), computed independently of the engine; see [sample_data/README.md](sample_data/README.md).
 
 ## Backend tests
 

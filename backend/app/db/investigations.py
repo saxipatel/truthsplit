@@ -1,15 +1,14 @@
 import logging
 import uuid
 from dataclasses import dataclass
-from decimal import Decimal
 
 from sqlalchemy import func, insert, select
 from sqlalchemy.orm import Session
 
-from app.comparison.findings import build_findings
-from app.comparison.matching import reconcile
-from app.comparison.metrics import MetricEvaluationError, MetricSpec, Record, evaluate, unmapped_fields
+from app.comparison.metrics import MetricEvaluationError, MetricSpec, Record, unmapped_fields
 from app.comparison.sql import metric_sql, query_hash
+from app.diagnosis.autopsy import SideInput, run_autopsy
+from app.diagnosis.dna import REPLAY_STEPS, source_facts
 from app.models import (
     ComparisonResult,
     Dataset,
@@ -20,11 +19,11 @@ from app.models import (
     InvestigationInput,
     MetricDefinition,
 )
-from app.models.investigations import EvidenceStatus, Side
+from app.models.investigations import Side
 
 log = logging.getLogger(__name__)
 
-ENGINE_VERSION = "1"
+ENGINE_VERSION = "2"
 
 
 def load_records(session: Session, dataset_id: uuid.UUID) -> list[Record]:
@@ -74,6 +73,17 @@ class InvestigationSide:
     metric: MetricDefinition
 
 
+def _side_input(side: InvestigationSide, spec: MetricSpec, records: list[Record]) -> SideInput:
+    return SideInput(
+        records=records,
+        spec=spec,
+        mapping=side.dataset.column_mapping,
+        source_type=side.dataset.source_type.value,
+        provenance=side.dataset.schema_json or {},
+        label=side.dataset.label,
+    )
+
+
 def run_investigation(
     session: Session, title: str, left: InvestigationSide, right: InvestigationSide, *, is_demo: bool = False
 ) -> Investigation:
@@ -89,26 +99,12 @@ def run_investigation(
             )
     left_records = load_records(session, left.dataset.id)
     right_records = load_records(session, right.dataset.id)
-    left_eval = evaluate(left_records, left_spec)
-    right_eval = evaluate(right_records, right_spec)
-    rec = reconcile(left_eval, right_eval)
-    drafts = build_findings(
-        left_eval,
-        right_eval,
-        rec,
-        {r.business_key for r in left_records if r.business_key is not None},
-        {r.business_key for r in right_records if r.business_key is not None},
+    result = run_autopsy(
+        _side_input(left, left_spec, left_records), _side_input(right, right_spec, right_records)
     )
-
-    explained = sum(
-        (
-            f.amount_impact
-            for f in drafts
-            if f.amount_impact is not None and f.evidence_status is not EvidenceStatus.UNEXPLAINED
-        ),
-        Decimal(0),
-    )
-    unexplained = rec.delta - explained
+    rec, drafts = result.comparison, result.findings
+    explained = result.explained
+    unexplained = result.delta - explained
     proof = {}
     for side, spec in (("left", left_spec), ("right", right_spec)):
         sql, params = metric_sql(spec)
@@ -117,29 +113,39 @@ def run_investigation(
             "params": {k: str(v) for k, v in params.items()},
             "query_hash": query_hash(sql, params),
         }
+    dna = result.dna | {"sources": {"left": source_facts(left.dataset), "right": source_facts(right.dataset)}}
 
     investigation = Investigation(
         id=uuid.uuid4(),
         title=title,
         left_metric_id=left.metric.id,
         right_metric_id=right.metric.id,
-        baseline_left=rec.left_value,
-        baseline_right=rec.right_value,
-        baseline_delta=rec.delta,
+        baseline_left=result.left_value,
+        baseline_right=result.right_value,
+        baseline_delta=result.delta,
         explained_delta=explained,
         unexplained_delta=unexplained,
         config_json={
             "key_field": "business_key",
             "delta": "right - left",
             "attribution_order": [
+                *(step for step, _, _ in REPLAY_STEPS),
+                "join_amplification",
+                "query_window_cutoff",
+                "refund_identity",
                 "missing_records",
                 "extra_records",
                 "duplicate_records",
                 "amount_mismatch",
                 "no_key",
             ],
-            "excluded": {"left": left_eval.excluded_counts, "right": right_eval.excluded_counts},
-            "currency": left_eval.currency or right_eval.currency,
+            "excluded": {
+                "left": result.base_left.excluded_counts,
+                "right": result.base_right.excluded_counts,
+            },
+            "currency": result.base_left.currency or result.base_right.currency,
+            "metric_dna": dna,
+            "replay": [step.as_json() for step in result.replay],
             "proof_queries": proof,
         },
         engine_version=ENGINE_VERSION,
@@ -170,8 +176,8 @@ def run_investigation(
             right_null_keys=len(rec.right_no_key),
             mismatched_keys=len(rec.mismatched),
             summary_json={
-                "left_contributing_rows": len(left_eval.contributions),
-                "right_contributing_rows": len(right_eval.contributions),
+                "left_contributing_rows": len(result.left_final.contributions),
+                "right_contributing_rows": len(result.right_final.contributions),
                 "totals": {k: str(v) for k, v in rec.totals().items()},
             },
         )

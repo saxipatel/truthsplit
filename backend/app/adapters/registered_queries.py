@@ -29,6 +29,15 @@ class Join:
 
 
 @dataclass(frozen=True)
+class QueryWindow:
+    """The date window the SQL itself applies: [start_param, end_param) as local dates in `timezone`."""
+
+    start_param: str
+    end_param: str
+    timezone: str
+
+
+@dataclass(frozen=True)
 class RegisteredQuery:
     key: str
     title: str
@@ -41,7 +50,17 @@ class RegisteredQuery:
     joins: tuple[Join, ...] = ()
     # What one result row represents. Differs from the business key's grain when a join fans out.
     grain: str = ""
+    # Table the amount column comes from. If a 1:N join starts at this table, each child row repeats the
+    # parent's amount: that is join amplification, and the autopsy can confirm it from this metadata.
+    measure_table: str = ""
+    window: QueryWindow | None = None
     notes: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def amplifying_joins(self) -> list[Join]:
+        return [
+            j for j in self.joins if j.cardinality == "1:N" and j.left.split(".")[0] == self.measure_table
+        ]
 
     @property
     def sql_hash(self) -> str:
@@ -119,6 +138,8 @@ WHERE o.status <> 'cancelled'
                 Join("orders.id", "refunds.order_id (aggregated)", "1:1"),
             ),
             grain="order",
+            measure_table="orders",
+            window=QueryWindow("start_date", "end_date", "America/New_York"),
         ),
         RegisteredQuery(
             key="sales_order_payments",
@@ -139,6 +160,8 @@ WHERE o.ordered_at >= CAST(:start_date AS timestamp) AT TIME ZONE 'UTC'
             tables=("orders", "payments"),
             joins=(Join("orders.id", "payments.order_id", "1:N"),),
             grain="payment",
+            measure_table="orders",
+            window=QueryWindow("start_date", "end_date", "UTC"),
             notes=(
                 "Orders paid in several parts appear once per payment, each row carrying the full order total.",
             ),
@@ -171,6 +194,8 @@ WHERE o.ordered_at >= CAST(:start_date AS timestamp) AT TIME ZONE 'UTC'
                 Join("order_items.product_id", "products.id", "N:1"),
             ),
             grain="order line",
+            measure_table="order_items",
+            window=QueryWindow("start_date", "end_date", "UTC"),
         ),
     )
 }

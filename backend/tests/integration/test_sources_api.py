@@ -293,8 +293,18 @@ def test_query_versus_query_reconciles_against_independent_sql(client):
     )[0]
     assert Decimal(inv["baseline_left"]) == f_total and Decimal(inv["baseline_right"]) == s_total
     assert Decimal(inv["explained_delta"]) + Decimal(inv["unexplained_delta"]) == s_total - f_total
-    # Split payments repeat an order on the sales side; those keys are flagged as non-unique.
-    assert inv["comparison"]["right_duplicate_keys"] > 0
+    # Split payments repeat an order on the sales side. The query metadata declares that 1:N join, so the
+    # autopsy confirms the excess copies as join amplification, computed here independently.
+    (excess,) = reader_sql(
+        "SELECT sum(total_amount * (n - 1)) FROM (SELECT o.total_amount, count(*) n FROM orders o"
+        " JOIN payments p ON p.order_id = o.id WHERE o.ordered_at >= '2026-03-01T00:00:00Z'"
+        " AND o.ordered_at < '2026-04-01T00:00:00Z' GROUP BY o.id HAVING count(*) > 1) t"
+    )[0]
+    amplification = next(f for f in inv["findings"] if f["type"] == "join_amplification")
+    assert (
+        amplification["evidence_status"] == "confirmed" and Decimal(amplification["amount_impact"]) == excess
+    )
+    assert inv["comparison"]["right_duplicate_keys"] == 0  # copies removed before record-level matching
 
 
 def test_snapshot_provenance_is_traceable(client, db_session):

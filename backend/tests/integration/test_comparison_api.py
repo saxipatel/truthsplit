@@ -327,3 +327,74 @@ def test_injection_shaped_attribute_names_and_values_are_bound_not_spliced(clien
     assert (
         db_session.execute(text("SELECT count(*) FROM investigations")).scalar() is not None
     )  # table intact
+
+
+def test_metric_dna_comparison(client):
+    a = define(
+        client,
+        "Finance revenue",
+        refund_policy="net_of_refunds",
+        timezone="America/New_York",
+        window_start="2026-03-01T00:00:00",
+        window_end="2026-04-01T00:00:00",
+    )
+    b = define(
+        client,
+        "Sales revenue",
+        window_start="2026-03-01T00:00:00",
+        window_end="2026-04-01T00:00:00",
+        filters=[{"field": "status", "op": "ne", "value": "cancelled"}],
+    )
+    body = client.get("/api/metric-definitions/compare", params={"left": a["id"], "right": b["id"]}).json()
+    differs = {f["field"] for f in body["fields"] if f["differs"]}
+    assert differs == {"window", "refund_policy", "filters"}
+    window = next(f for f in body["fields"] if f["field"] == "window")
+    assert "2026-03-01T05:00:00+00:00" in window["left"] and "2026-03-01T00:00:00+00:00" in window["right"]
+    assert body["filters_right_only"] == ["status ne cancelled"]
+    assert (
+        client.get(
+            "/api/metric-definitions/compare",
+            params={"left": a["id"], "right": "00000000-0000-0000-0000-000000000000"},
+        ).status_code
+        == 404
+    )
+
+
+def test_investigation_records_replay_and_dna(client):
+    rows = [
+        [
+            f"r{i}",
+            f"O{i}",
+            "100.00",
+            "25.00" if i % 2 else "",
+            "USD",
+            f"2026-03-{i + 1:02d}T12:00:00Z",
+            "paid",
+            "EU",
+        ]
+        for i in range(6)
+    ]
+    ds = import_rows(client, "refunds.csv", rows)
+    net = define(client, "Net", refund_policy="net_of_refunds")
+    gross = define(client, "Gross")
+    inv = client.post(
+        "/api/investigations",
+        json={
+            "title": "refunds",
+            "left": {"dataset_id": ds, "metric_definition_id": net["id"]},
+            "right": {"dataset_id": ds, "metric_definition_id": gross["id"]},
+        },
+    ).json()
+    assert Decimal(inv["baseline_delta"]) == Decimal(75) and Decimal(inv["unexplained_delta"]) == 0
+    (finding,) = inv["findings"]
+    assert (
+        finding["type"] == "refund_policy"
+        and finding["evidence_status"] == "confirmed"
+        and finding["rule_id"] == "definition.refund_policy"
+    )
+    replay = inv["config_json"]["replay"]
+    assert [(s["step"], s["status"]) for s in replay] == [("refund_policy", "applied")]
+    assert Decimal(replay[0]["contribution"]) == Decimal(75)
+    assert inv["config_json"]["metric_dna"]["sources"]["left"]["source_type"] == "csv"
+    ev = client.get(f"/api/investigations/{inv['id']}/findings/{finding['id']}/evidence").json()
+    assert ev["total"] == 3 and all(Decimal(e["contribution"]) == Decimal(25) for e in ev["items"])

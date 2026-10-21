@@ -35,6 +35,7 @@ class FindingType(StrEnum):
     MISSING_RECORDS = "missing_records"
     EXTRA_RECORDS = "extra_records"
     AMOUNT_MISMATCH = "amount_mismatch"
+    DEFINITION_DIFFERENCE = "definition_difference"  # grain, null policy or value field
     KEY_QUALITY = "key_quality"
     UNEXPLAINED = "unexplained"
 

@@ -5,7 +5,7 @@ TEST_SOURCE ?= postgresql+psycopg://$(SOURCE_READER_USER):$(SOURCE_READER_PASSWO
 # Used only to check that a privileged login is refused.
 TEST_SOURCE_ADMIN ?= postgresql+psycopg://source_admin:$(SOURCE_DB_ADMIN_PASSWORD)@localhost:$(SOURCE_DB_PORT)/$(SOURCE_DB_NAME)
 
-.PHONY: env up down logs backend-venv test-db seed-source test lint
+.PHONY: env up down logs backend-venv test-db seed-source demo demo-files test lint
 
 env:
 	@test -f .env || scripts/generate_env.sh
@@ -27,6 +27,12 @@ test-db:
 
 seed-source:
 	docker compose exec -T source-db sh /docker-entrypoint-initdb.d/02-shop.sh
+
+demo:
+	docker compose exec -T backend python -m app.seed.load
+
+demo-files:
+	cd backend && .venv/bin/python -m app.seed.demo ../sample_data
 
 test: env test-db
 	cd backend && TRUTHSPLIT_TEST_DATABASE_URL=$(TEST_DB) TRUTHSPLIT_TEST_SOURCE_URL=$(TEST_SOURCE) TRUTHSPLIT_TEST_SOURCE_ADMIN_URL=$(TEST_SOURCE_ADMIN) .venv/bin/pytest

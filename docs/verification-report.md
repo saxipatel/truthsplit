@@ -97,3 +97,52 @@ Same environment as Milestone 3.
 - `ALTER ROLE ts_reader SET default_transaction_read_only = off` **succeeds**. PostgreSQL lets any role change its own session defaults. It grants no write access, as the 42501 results above show, and TruthSplit cannot issue it because its queries run in a read-only transaction. The setting was restored. See the limitations in `docs/security.md`.
 
 **Credential rotation.** The local `.env` had been copied from `.env.example`, so the real database passwords were the committed placeholder strings. All three database passwords were rotated to random values with `ALTER ROLE` and written to `.env`. `scripts/generate_env.sh` now creates `.env` with random passwords for new setups.
+
+## Milestone 5 verification (2026-10-21)
+
+Same environment as Milestone 3.
+
+**Automated tests.** 284 passed, 0 failed, 0 skipped, 1 warning (the Starlette test-client deprecation notice), on both Python 3.14.6 and 3.12.15. No end-to-end tests exist yet.
+
+**Oracle independence.** `app/seed/shop.py` reproduced the seeded source row for row: 6,000 orders, 15,000 lines, 6,180 payments and 780 refunds all identical. The manifest is computed from it.
+
+**Scenario A (fully explained).** Model, independent SQL over the source, and the engine all agree:
+
+| | Expected (manifest) | Engine |
+|---|---|---|
+| Left (finance net) | 1,397,648.86 | 1,397,648.86 |
+| Right (sales) | 1,553,646.25 | 1,553,646.25 |
+| A1 refund treatment, confirmed | +102,360.14 | +102,360.14 |
+| A2 join amplification, confirmed | +56,224.00 | +56,224.00 |
+| A3 cutoff, finance-only, confirmed | −9,604.00 | −9,604.00 |
+| A4 cutoff, sales-only, confirmed | +7,017.25 | +7,017.25 |
+| Unexplained | 0.00 | 0.00 |
+
+For each finding, the set of affected order numbers in its evidence equals the manifest's set.
+
+**No double counting.** For every order with an attributed contribution, the sum of its evidence contributions across all findings equals its actual difference (sales gross × payment rows − finance net). This covers the 15 orders that belong to two causes.
+
+**Scenario B (unexplained remainder).** The expected delta of 3,255.50 matches.
+
+| Issue | Status | Expected | Engine |
+|---|---|---|---|
+| B1 missing orders | confirmed | −6,425.81 | −6,425.81 |
+| B3 exact duplicates | confirmed | +3,166.56 | +3,166.56 |
+| Record-level mismatch | confirmed | +5,518.00 (405.00 keying errors + 5,113.00 unattributed fan-out) | +5,518.00 |
+| B4 join-like fan-out | suspected | 5,113.00 indicative, not attributed | no amount; indicative 5,113.00 |
+| B5 unexplained | unexplained | 996.75 | 996.75 |
+| Non-unique keys | suspected | 13 right-side keys | 13 right-side keys |
+
+SQL over the stored records independently reproduced both totals, the missing amount, the exact-duplicate amount and the unkeyed sum.
+
+**Persistence and reproducibility.** For each demo investigation, attributed findings sum to delta and each finding's evidence sums to its amount. Re-running an investigation on the same snapshots produced identical findings, statuses and proof hashes. Loading the demo twice reused every dataset, definition and investigation.
+
+**Source unchanged.** An md5 over all rows of the six source tables was identical before and after loading the demo.
+
+**Mutation checks** (the tests can fail):
+- Making join amplification remove one copy too many caused the engine's sum-to-delta check to fail while loading, so 5 demo tests errored.
+- Disabling the refund-identity rule failed its unit test. The demo scenarios don't exercise that rule.
+
+**Live stack.** `make demo` against the compose stack produced the same totals and findings as the manifest. No passwords appeared in the backend logs, and all four services were healthy.
+
+**Limitations found.** The refund-identity rule has unit tests only. Suspected join amplification previously wrote an indicative amount into evidence `contribution`; it now leaves the column empty (decision 26).

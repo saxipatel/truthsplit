@@ -11,6 +11,7 @@ from app.api.deps import SessionDep
 from app.comparison.matching import ComparisonError
 from app.comparison.metrics import MetricEvaluationError, MetricSpec
 from app.db.investigations import InvestigationSide, create_metric_definition, run_investigation
+from app.diagnosis import dna
 from app.models import ComparisonResult, Dataset, EvidenceRecord, Finding, Investigation, MetricDefinition
 from app.schemas.imports import Page
 from app.schemas.investigations import (
@@ -49,6 +50,18 @@ def list_definitions(session: SessionDep, name: str | None = None) -> list[Metri
     if name:
         stmt = stmt.where(MetricDefinition.name == name)
     return list(session.scalars(stmt))
+
+
+@router.get("/metric-definitions/compare")
+def compare_definitions(left: uuid.UUID, right: uuid.UUID, session: SessionDep) -> dict:
+    """Metric DNA: the two definitions side by side, with every differing field marked."""
+    a = _get(session, MetricDefinition, left, "Metric definition")
+    b = _get(session, MetricDefinition, right, "Metric definition")
+    return {
+        "left": {"id": str(a.id), "name": a.name, "version": a.version},
+        "right": {"id": str(b.id), "name": b.name, "version": b.version},
+        **dna.compare(MetricSpec.from_model(a), MetricSpec.from_model(b)),
+    }
 
 
 @router.get("/metric-definitions/{definition_id}", response_model=MetricDefinitionOut)

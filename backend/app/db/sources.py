@@ -4,7 +4,8 @@ stored data exactly like file imports do."""
 import hashlib
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -99,6 +100,9 @@ def snapshot_query(
             "tables": list(query.tables),
             "joins": [j.__dict__ for j in query.joins],
             "grain": query.grain,
+            "measure_table": query.measure_table,
+            "amplifying_joins": [j.__dict__ for j in query.amplifying_joins],
+            "window": _resolved_window(query, params),
             "executed_at": datetime.now(UTC).isoformat(),
             "server_version": result.server_version,
             "role": result.role,
@@ -140,3 +144,19 @@ def check_freshness(session: Session, settings: Settings, dataset: Dataset) -> d
     current = content_hash(result.rows)
     status = "current" if current == snap.get("content_sha256") else "source_changed"
     return {**base, "status": status, "current_content_sha256": current, "current_rows": len(result.rows)}
+
+
+def _resolved_window(query: RegisteredQuery, params: dict) -> dict | None:
+    """The query's own date window as UTC instants, so the autopsy can tell which records it could return."""
+    w = query.window
+    if w is None:
+        return None
+    tz = ZoneInfo(w.timezone)
+    start = datetime.combine(params[w.start_param], time(), tz).astimezone(UTC)
+    end = datetime.combine(params[w.end_param], time(), tz).astimezone(UTC)
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "end_inclusive": False,
+        "timezone": w.timezone,
+    }

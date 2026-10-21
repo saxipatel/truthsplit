@@ -269,3 +269,53 @@ Each entry records a decision made while building TruthSplit, the context for it
 **Context.** Found during Milestone 4 verification: copying `.env.example` made the committed placeholders the real passwords.
 
 **Consequences.** Passwords take effect when the database volumes are first created. Existing volumes need `ALTER ROLE` as well, which is what was done for this machine's stack.
+
+## 22. Ordered counterfactual replay for definition differences
+
+**Decision.** Definition differences are attributed by switching the left definition to the right one a rule at a time, in a fixed order, and re-evaluating the left data after each switch (`diagnosis/autopsy.py`). Each step's standalone effect is also computed and reported when it differs.
+
+**Context.** The blueprint requires non-overlapping, ordered attribution that never forces a 100% explanation. Independent per-rule effects double-count whenever rules touch the same records.
+
+**Alternatives.** Independent effects for each rule, with the overlap shown as a separate residual; Shapley-style averaging over all orders.
+
+**Reason.** Sequential replay partitions the change exactly and is easy to audit: each step is "re-run with one rule changed". Shapley values are order-independent but cost 2^n evaluations, and are harder to explain to someone reconciling a report.
+
+**Trade-offs.** Per-step amounts depend on the order. This is disclosed through `overlap_note` and the standalone figures.
+
+**Consequences.** The order is recorded in each investigation's `config_json.attribution_order` and its results in `config_json.replay`.
+
+## 23. Confirmation requires declared metadata or an exact identity
+
+**Decision.** Join amplification is confirmed only when the snapshot's registered query declares a 1:N join from the measure's table. A cutoff on one-sided records is confirmed only against a declared query window. Refund treatment at data level is confirmed only by an exact per-key identity with recorded refunds. Otherwise the pattern is `suspected`, and no amount is attributed.
+
+**Context.** The same row pattern (several rows per key with the same amount) can be join copies or legitimate child rows, and the data alone can't tell them apart.
+
+**Reason.** Attributing an amount on pattern alone would sometimes explain a real data problem away. Suspected findings keep the amount in the record-level categories, where it stays visible.
+
+**Consequences.** Registered queries gained `measure_table` and `window` metadata, and snapshots store them (with the window resolved to UTC) so the autopsy can rely on provenance.
+
+## 24. New finding type for other definition differences
+
+**Decision.** Grain, null-policy and value-field differences use a new `definition_difference` finding type (migration `0003`), rather than being folded into an existing type.
+
+**Reason.** Calling a grain change "join amplification" or "duplicate records" would misstate the cause: it is a rule difference, not bad data.
+
+## 25. Demo oracle from an independent model of the source
+
+**Decision.** The demo manifest is computed from `app/seed/shop.py`, which re-implements the source seed's integer arithmetic in Python. It does not come from querying the source or from running the engine.
+
+**Context.** The blueprint requires known ground truth that is checked by tests, and warns against fabricating results without running the pipeline. An oracle produced by the engine would only test the engine against itself.
+
+**Alternatives.** Compute expected values with SQL over the seeded database; hard-code the expected numbers.
+
+**Reason.** A separate model gives three independent paths to the same numbers: model, SQL and engine. A test checks that the model matches the seeded database row for row (orders, lines, payments and refunds), and the generated files are committed and tested to equal a fresh generation.
+
+**Trade-offs.** The seed arithmetic lives in two places, SQL and Python. The model-vs-database test fails if they drift.
+
+## 26. Suspected findings carry no evidence contribution
+
+**Decision.** Evidence rows of a suspected finding have `contribution = NULL`. Their indicative figure is in `detail.indicative_excess`.
+
+**Context.** Suspected findings attribute no amount. Putting a number in the contribution column would make evidence sums disagree with finding amounts, and would let a reader add up something that was never attributed.
+
+**Consequences.** For every finding with an amount, its evidence contributions sum to that amount, and all attributed evidence sums to delta. The demo tests check this per order.
