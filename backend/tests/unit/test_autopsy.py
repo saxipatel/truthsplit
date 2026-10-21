@@ -290,3 +290,50 @@ def test_random_scenarios_always_reconcile(seed):
     left_rows, right_rows = rows(rnd.randint(0, 120)), rows(rnd.randint(0, 120))
     provenance = FAN_OUT if rnd.random() < 0.5 else {}
     autopsy(side(left_rows, **spec()), side(right_rows, provenance=provenance, **spec()))
+
+
+class TestRefundIdentityBoundaries:
+    def test_difference_that_is_not_exactly_the_refund_stays_a_mismatch(self):
+        left = [rec("A", "100")]
+        right = [rec("A", "76", refund="25")]  # net would be 75; the extra 1.00 breaks the identity
+        f = by_type(autopsy(side(left), side(right)))
+        assert FindingType.REFUND_POLICY not in f and f[FindingType.AMOUNT_MISMATCH].amount_impact == D(-24)
+
+    def test_identity_runs_after_join_copies_are_removed(self):
+        left = [rec("A", "100", attrs={"method": "card"}), rec("A", "100", attrs={"method": "gift"})]
+        right = [rec("A", "70", refund="30")]
+        r = autopsy(side(left, provenance=FAN_OUT), side(right))
+        f = by_type(r)
+        assert f[FindingType.JOIN_AMPLIFICATION].amount_impact == D(-100)
+        assert f[FindingType.REFUND_POLICY].amount_impact == D(-30)
+        assert FindingType.AMOUNT_MISMATCH not in f and r.delta == D(-130)
+
+    def test_exact_duplicate_and_netted_refund_on_one_key_split_cleanly(self):
+        left = [rec("A", "100", raw="a"), rec("A", "100", raw="a")]
+        right = [rec("A", "80", refund="20")]
+        f = by_type(autopsy(side(left), side(right)))
+        assert (
+            f[FindingType.DUPLICATE_RECORDS].amount_impact,
+            f[FindingType.REFUND_POLICY].amount_impact,
+        ) == (D(-100), D(-20))
+
+    def test_double_deduction_is_two_mechanisms_not_double_counting(self):
+        # The left source already nets the refund AND its metric subtracts it again.
+        left = [rec("A", "75", refund="25")]
+        right = [rec("A", "100")]
+        r = autopsy(side(left, refund_policy="net_of_refunds"), side(right))
+        f = {x.rule_id: x.amount_impact for x in r.findings}
+        assert f == {"definition.refund_policy": D(25), "data.refund_identity": D(25)}
+        assert r.delta == D(50)  # 100 - (75 - 25): the refund really is deducted twice on the left
+
+    def test_refund_on_either_side_and_either_sign(self):
+        assert by_type(autopsy(side([rec("A", "75", refund="25")]), side([rec("A", "100")])))[
+            FindingType.REFUND_POLICY
+        ].amount_impact == D(25)
+        assert by_type(autopsy(side([rec("A", "100")]), side([rec("A", "75", refund="25")])))[
+            FindingType.REFUND_POLICY
+        ].amount_impact == D(-25)
+
+    def test_zero_refund_never_matches(self):
+        f = by_type(autopsy(side([rec("A", "10", refund="0")]), side([rec("A", "10.00")])))
+        assert f == {}

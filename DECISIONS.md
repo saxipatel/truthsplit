@@ -319,3 +319,18 @@ Each entry records a decision made while building TruthSplit, the context for it
 **Context.** Suspected findings attribute no amount. Putting a number in the contribution column would make evidence sums disagree with finding amounts, and would let a reader add up something that was never attributed.
 
 **Consequences.** For every finding with an amount, its evidence contributions sum to that amount, and all attributed evidence sums to delta. The demo tests check this per order.
+
+## 27. Keep the refund-identity rule; make its assumptions explicit and test them in a demo
+
+**Decision.** The data-level refund rule stays supported. It classifies a matched key as refund treatment when `|right − left|` equals, to the cent, the refund recorded for that key on either side.
+
+**Context.** The Milestone 5 report said disabling this rule "failed its unit test". That came from a deliberate mutation check (the rule was switched off to prove the test can fail), not a defect; with the real code the test passes. It did expose that no demo scenario exercised the rule.
+
+**Reason.** The behaviour is supported by reproducible evidence: per-key arithmetic over listed records, re-implemented in SQL in `test_scenario_c_refund_identity_matches_independent_sql`. The rule runs after join copies and exact duplicates are removed, and only on what remains of a matched key, so it can't take an amount another category already holds.
+
+**Trade-offs.**
+- A coincidental equality would be misread as refund treatment; this is stated as an assumption on every such finding.
+- The rule matches on the magnitude of the difference, not its sign, because either source may be the netted one.
+- One refund can appear in two findings when a netted source is also measured net (double deduction). The two mechanisms are real and their sum equals the difference.
+
+**Consequences.** Demo scenario C (384 refund-identity orders, 10 also split by payments, 15 keying errors) and six boundary unit tests cover the rule. With the rule disabled, 6 tests now fail instead of 1.

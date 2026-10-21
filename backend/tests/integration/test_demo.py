@@ -6,7 +6,6 @@ import os
 from collections import defaultdict
 from decimal import Decimal
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import create_engine, select, text
@@ -14,9 +13,9 @@ from sqlalchemy import create_engine, select, text
 from app.core.config import Settings
 from app.db.investigations import InvestigationSide, run_investigation
 from app.models import EvidenceRecord, Finding, Investigation
-from app.seed.demo import LEDGER_FILE, finance_orders, ledger_csv, manifest, net
+from app.seed.demo import FILE_BUILDERS, manifest
 from app.seed.load import load_demo
-from app.seed.shop import build_orders, local_month_bounds
+from app.seed.shop import build_orders
 
 SOURCE_URL = os.environ.get("TRUTHSPLIT_TEST_SOURCE_URL")
 pytestmark = [
@@ -83,7 +82,9 @@ def test_python_model_matches_the_seeded_source():
 
 
 def test_committed_sample_files_are_reproducible(oracle):
-    assert (SAMPLE_DATA / LEDGER_FILE).read_bytes() == ledger_csv(build_orders())
+    orders = build_orders()
+    for name, build in FILE_BUILDERS.items():
+        assert (SAMPLE_DATA / name).read_bytes() == build(orders), name
     assert json.loads((SAMPLE_DATA / "manifest.json").read_text()) == json.loads(json.dumps(oracle))
 
 
@@ -135,29 +136,40 @@ def test_scenario_a_engine_matches_manifest(loaded, oracle, db_session):
         assert keys == set(issue["affected"]), issue["id"]
 
 
-def test_scenario_a_overlaps_are_not_double_counted(loaded, oracle, db_session):
-    """Per order: the evidence contributions of all attributed findings must add up to that order's actual
-    difference (sales gross x payment rows minus finance net), so no part of an order is counted twice."""
-    inv = loaded["A"]
-    per_key = defaultdict(Decimal)
+PER_KEY_SQL = """
+SELECT business_key, sum(CASE WHEN :net THEN amount - COALESCE(refund_amount, 0) ELSE amount END)
+FROM dataset_records WHERE dataset_id = :d AND business_key IS NOT NULL GROUP BY business_key
+"""
+
+
+@pytest.mark.parametrize("sid", ["A", "B", "C"])
+def test_overlapping_causes_are_not_double_counted(loaded, oracle, db_session, sid):
+    """Per key: the evidence contributions of all attributed findings must add up to that key's actual
+    difference, computed here in SQL from the stored records under each side's refund policy. A key in two
+    findings therefore cannot have any part of its difference counted twice."""
+    inv = loaded[sid]
+    sides = {}
+    for i in inv.inputs:
+        metric = inv.left_metric if i.side.value == "left" else inv.right_metric
+        rows = db_session.execute(
+            text(PER_KEY_SQL), {"d": i.dataset_id, "net": metric.refund_policy.value == "net_of_refunds"}
+        ).all()
+        sides[i.side.value] = dict(rows)
+    actual = {
+        k: sides["right"].get(k, D(0)) - sides["left"].get(k, D(0))
+        for k in sides["left"].keys() | sides["right"].keys()
+    }
+    attributed = defaultdict(Decimal)
     for f in inv.findings:
         if f.amount_impact is None:
             continue
         for e in evidence(db_session, f):
-            per_key[e.business_key] += e.contribution
-    orders = {o.order_number: o for o in build_orders()}
-    exp_keys = {o for i in scenario(oracle, "A")["issues"] for o in i["affected"]}
-    assert set(per_key) == exp_keys
-
-    fin = {o.order_number for o in finance_orders(list(orders.values()))}
-    lo, hi = local_month_bounds(2026, 3, ZoneInfo("UTC"))
-    for key, attributed in per_key.items():
-        o = orders[key]
-        left = net(o) if key in fin else D(0)
-        right = o.total_amount * len(o.payments) if (o.payments and lo <= o.ordered_at < hi) else D(0)
-        assert attributed == right - left, key
-    for overlap in scenario(oracle, "A")["overlaps"]:
-        assert overlap["order_number"] in per_key
+            if e.business_key is not None:
+                attributed[e.business_key] += e.contribution
+    assert {k for k, v in actual.items() if v} == {k for k, v in attributed.items() if v}
+    assert all(attributed[k] == v for k, v in actual.items() if v)
+    multi = [o["order_number"] for o in scenario(oracle, sid)["overlaps"]]
+    assert all(attributed[k] == actual[k] for k in multi)
 
 
 # ---------------------------------------------------------------------------- scenario B
@@ -219,6 +231,50 @@ def test_scenario_b_matches_independent_sql_over_stored_records(loaded, oracle, 
     assert row[2] == D(issues["B1"]["expected_contribution"])
     assert row[3] == D(issues["B3"]["expected_contribution"])
     assert row[4] == D(issues["B5"]["expected_contribution"])
+
+
+# ---------------------------------------------------------------------------- scenario C (refund identity)
+
+
+def test_scenario_c_engine_matches_manifest(loaded, oracle, db_session):
+    inv, sc = loaded["C"], scenario(oracle, "C")
+    exp = sc["expected"]
+    assert (inv.baseline_left, inv.baseline_right, inv.baseline_delta) == tuple(
+        D(exp[k]) for k in ("left_total", "right_total", "delta")
+    )
+    assert inv.unexplained_delta == 0
+    found = findings_by_rule(inv)
+    assert sum(1 for f in inv.findings if f.amount_impact is not None) == 3
+    for issue in sc["issues"]:
+        (f,) = found[(issue["category"], issue["rule_id"])]
+        assert f.evidence_status.value == issue["expected_status"], issue["id"]
+        assert f.amount_impact == D(issue["expected_contribution"]), issue["id"]
+        assert {e.business_key for e in evidence(db_session, f)} == set(issue["affected"]), issue["id"]
+    assert inv.config_json["replay"] == []  # both sides use the same gross definition
+
+
+def test_scenario_c_refund_identity_matches_independent_sql(loaded, oracle, db_session):
+    """The refund rule re-implemented in SQL: after collapsing the left's join copies to one row per order,
+    a key belongs to the refund identity when |right - left| equals the refund recorded for it."""
+    inv = loaded["C"]
+    left, right = sorted(inv.inputs, key=lambda i: i.side.value)
+    row = db_session.execute(
+        text(
+            """
+            WITH l AS (SELECT business_key k, min(amount) one_copy, sum(amount) total, count(*) n
+                       FROM dataset_records WHERE dataset_id = :l GROUP BY 1),
+                 r AS (SELECT business_key k, sum(amount) v, sum(COALESCE(refund_amount, 0)) refund
+                       FROM dataset_records WHERE dataset_id = :r GROUP BY 1),
+                 j AS (SELECT k, l.one_copy, r.v, r.refund FROM l JOIN r USING (k))
+            SELECT (SELECT -sum(total - one_copy) FROM l WHERE n > 1),
+                   (SELECT sum(v - one_copy) FROM j WHERE refund > 0 AND abs(v - one_copy) = refund),
+                   (SELECT sum(v - one_copy) FROM j WHERE v <> one_copy AND NOT (refund > 0 AND abs(v - one_copy) = refund))
+            """
+        ),
+        {"l": left.dataset_id, "r": right.dataset_id},
+    ).one()
+    issues = {i["id"]: D(i["expected_contribution"]) for i in scenario(oracle, "C")["issues"]}
+    assert tuple(row) == (issues["C1"], issues["C2"], issues["C3"])
 
 
 # ---------------------------------------------------------------------------- persistence and reproducibility

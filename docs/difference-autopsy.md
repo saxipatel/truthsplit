@@ -51,10 +51,13 @@ One record can be affected by more than one rule. For example, a fully refunded 
   - unexplained: manual journal lines without an order number, 996.75
   - suspected: non-unique keys
 
+- **Scenario C, refunds netted at source.** The sales query (gross, with join copies) against a settlement export whose amounts are already net of refunds. The definitions are identical, so the refund difference exists only in the data. Delta −159,249.32 = join amplification −56,224.00 (left) + refund identity −100,479.19 (384 orders) + mismatch −2,546.13 (15 keying errors); unexplained 0.00. Join copies are removed before the identity is tested, so split and refunded orders contribute once to each. On refunded orders with a keying error, refund + error does not equal the refund, so the whole difference stays a mismatch.
+
 Neither Finance nor Sales is "wrong" in scenario A. They answer different questions, and the sales query counts split-payment orders more than once.
 
 ## Limits
 
 - **Rules are not inferred from SQL.** Query-level rules use declared registered-query metadata. A file source has no metadata, so its join copies can only be suspected.
-- **Refund identity** needs the refund amount recorded on at least one side. Neither demo scenario exercises it (both record refunds explicitly), so it is covered by unit tests only.
+- **Refund identity** needs the refund amount recorded on at least one side, and an exact match to the cent. It matches on the size of the difference because either side can be the netted one. A genuine mismatch that happens to equal the refund would be misclassified; that assumption is written on each finding. Demo scenario C and unit tests cover it.
+- **Double deduction.** If a source already reports net amounts *and* its metric subtracts refunds again, the same refund appears in two findings: the definition replay step and the refund identity. That is not double counting. The left really does deduct it twice, and the two findings sum to the actual difference (unit test `test_double_deduction_is_two_mechanisms_not_double_counting`).
 - **Unreplayable rules:** if the left data lacks a field the right definition uses, that rule is reported as suspected and its effect stays inside the record-level findings.

@@ -71,7 +71,7 @@ How differences are attributed, and what `confirmed`, `suspected` and `unexplain
 make demo
 ```
 
-This loads two **synthetic** investigations into the running stack: one fully explained by refund treatment, join duplication and reporting cutoffs, and one with an unexplained remainder. Their expected results are in [`sample_data/manifest.json`](sample_data/manifest.json), computed independently of the engine; see [sample_data/README.md](sample_data/README.md).
+This loads three **synthetic** investigations into the running stack: one fully explained by refund treatment, join duplication and reporting cutoffs; one with an unexplained remainder; and one where a source reports amounts already net of refunds. Their expected results are in [`sample_data/manifest.json`](sample_data/manifest.json), computed independently of the engine; see [sample_data/README.md](sample_data/README.md).
 
 ## Backend tests
 

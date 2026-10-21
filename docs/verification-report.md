@@ -146,3 +146,19 @@ SQL over the stored records independently reproduced both totals, the missing am
 **Live stack.** `make demo` against the compose stack produced the same totals and findings as the manifest. No passwords appeared in the backend logs, and all four services were healthy.
 
 **Limitations found.** The refund-identity rule has unit tests only. Suspected join amplification previously wrote an indicative amount into evidence `contribution`; it now leaves the column empty (decision 26).
+
+## Milestone 5 follow-up: refund identity (2026-10-21)
+
+**Investigation.** The reported "failure" of the refund-identity unit test came from the deliberate mutation check in the Milestone 5 report: the rule was disabled on purpose and the test correctly failed. The committed code passes all four refund tests, and the implementation, the test expectations and the rule's assumptions were reviewed. The rule was kept (decision 27). The real gap was demo coverage.
+
+**Added.**
+- Demo scenario C (`settlement_march.csv`).
+- Six boundary unit tests: a non-exact difference stays a mismatch; the identity is tested after join copies are removed; exact duplicates and a netted refund on one key; double deduction; refund on either side and either sign; a zero refund never matches.
+- A per-key no-double-counting test for all three scenarios, computing each key's actual difference in SQL over the stored records.
+
+**Results.**
+- **Tests:** 294 passed, 0 failed, 0 skipped, 1 warning.
+- **Scenario C:** the engine matches the manifest (delta −159,249.32; C1 −56,224.00, C2 −100,479.19, C3 −2,546.13; unexplained 0.00). The affected order sets match per finding. A SQL re-implementation of the rule over the stored records returns the same three amounts.
+- **No double counting:** in A, B and C, every key's attributed evidence sums to its actual difference, including the 12 overlapping orders in C.
+- **Mutation check repeated:** disabling the rule now fails 6 tests, including `test_scenario_c_engine_matches_manifest`. The code was restored and is identical to the commit.
+- **Live stack:** `make demo` loaded scenario C with the same totals and findings as the manifest.

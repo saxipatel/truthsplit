@@ -1,10 +1,11 @@
 """Demo scenarios and their oracle manifest.
 
 Scenario A compares two registered queries over the demo source. Scenario B compares the finance query with a
-ledger export (a CSV generated here) that has deliberately planted problems. Every expected value below is
+ledger export (a CSV generated here) that has deliberately planted problems. Scenario C compares the sales query
+with a settlement export whose amounts are already net of refunds. Every expected value below is
 computed from the pure-Python source model in shop.py, not from the database or the investigation engine.
 
-    python -m app.seed.demo     # rewrites sample_data/finance_ledger_march.csv and sample_data/manifest.json
+    python -m app.seed.demo     # rewrites the CSV files and manifest.json in sample_data/
 """
 
 import csv
@@ -22,6 +23,25 @@ ZERO = Decimal("0.00")
 NY, UTC_ZONE = ZoneInfo("America/New_York"), ZoneInfo("UTC")
 MARCH = {"start_date": "2026-03-01", "end_date": "2026-04-01"}
 LEDGER_FILE = "finance_ledger_march.csv"
+SETTLEMENT_FILE = "settlement_march.csv"
+SETTLEMENT_COLUMNS = [
+    "order_number",
+    "settled_at",
+    "net_amount",
+    "refunded",
+    "currency",
+    "status",
+    "processor_ref",
+]
+SETTLEMENT_MAPPING = {
+    "business_key": ["order_number"],
+    "amount": "net_amount",
+    "refund_amount": "refunded",
+    "currency": "currency",
+    "occurred_at": "settled_at",
+    "status": "status",
+    "attributes": ["processor_ref"],
+}
 LEDGER_COLUMNS = ["order_number", "posted_at", "gross_amount", "refunded", "currency", "status", "memo"]
 LEDGER_MAPPING = {
     "business_key": ["order_number"],
@@ -38,6 +58,7 @@ FINANCE_METRIC = {
     "refund_policy": "net_of_refunds",
 }
 SALES_METRIC = {"name": "Sales gross revenue (demo)", "aggregation": "sum", "refund_policy": "gross"}
+GROSS_METRIC = {"name": "Gross revenue (demo)", "aggregation": "sum", "refund_policy": "gross"}
 MANUAL_ADJUSTMENTS = [
     (Decimal("1250.00"), "2026-03-31T21:00:00+00:00", "manual adjustment: accrual"),
     (Decimal("-310.40"), "2026-03-15T09:00:00+00:00", "manual adjustment: write-off"),
@@ -283,6 +304,136 @@ def scenario_b(orders: list[Order]) -> dict:
     }
 
 
+def sales_orders(orders: list[Order]) -> list[Order]:
+    utc = local_month_bounds(2026, 3, UTC_ZONE)
+    return sorted((o for o in orders if o.payments and _in(o, utc)), key=lambda o: o.order_number)
+
+
+def _settlement_plan(sales: list[Order]) -> dict[str, dict[int, Decimal]]:
+    refunded = [o for o in sales if o.refund]
+    plain = [o for o in sales if not o.refund]
+    plan = {
+        # a keying error on a refunded order: the difference is no longer exactly the refund
+        "refund_plus_error": {o.id: Decimal("1.00") for i, o in enumerate(refunded) if i % 40 == 5},
+        "plain_error": {o.id: Decimal("12.50") for i, o in enumerate(plain) if i % 600 == 77},
+    }
+    for o in refunded:
+        if o.id in plan["refund_plus_error"]:
+            assert abs(-o.refund + plan["refund_plus_error"][o.id]) != o.refund
+    return plan
+
+
+def settlement_csv(orders: list[Order]) -> bytes:
+    sales = sales_orders(orders)
+    plan = _settlement_plan(sales)
+    errors = {**plan["refund_plus_error"], **plan["plain_error"]}
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(SETTLEMENT_COLUMNS)
+    for o in sales:
+        settled = net(o) + errors.get(o.id, ZERO)
+        w.writerow(
+            [
+                o.order_number,
+                o.ordered_at.isoformat(),
+                money(settled),
+                money(o.refund or ZERO),
+                "USD",
+                o.status,
+                f"PR-{o.id:06d}",
+            ]
+        )
+    return buf.getvalue().encode()
+
+
+def scenario_c(orders: list[Order]) -> dict:
+    sales = sales_orders(orders)
+    plan = _settlement_plan(sales)
+    split = [o for o in sales if len(o.payments) > 1]
+    refunded = [o for o in sales if o.refund]
+    identity = [o for o in refunded if o.id not in plan["refund_plus_error"]]
+    errors = [o for o in sales if o.id in plan["refund_plus_error"] or o.id in plan["plain_error"]]
+    left_total = sum((o.total_amount * len(o.payments) for o in sales), ZERO)
+    right_total = sum((net(o) for o in sales), ZERO) + sum((sum(plan[k].values(), ZERO) for k in plan), ZERO)
+    mismatch = sum(
+        (
+            -(o.refund or ZERO) + plan["refund_plus_error"][o.id]
+            for o in errors
+            if o.id in plan["refund_plus_error"]
+        ),
+        ZERO,
+    ) + sum(plan["plain_error"].values(), ZERO)
+    issues = [
+        {
+            "id": "C1",
+            "category": "join_amplification",
+            "expected_status": "confirmed",
+            "rule_id": "data.join_amplification",
+            "description": "Left is the sales query (orders joined to payments, 1:N declared); split-payment orders appear twice.",
+            "affected": [o.order_number for o in split],
+            "expected_contribution": money(
+                -sum((o.total_amount * (len(o.payments) - 1) for o in split), ZERO)
+            ),
+        },
+        {
+            "id": "C2",
+            "category": "refund_policy",
+            "expected_status": "confirmed",
+            "rule_id": "data.refund_identity",
+            "description": (
+                "The settlement export reports each order net of its refund and records the refund. Both metrics are "
+                "gross, so the definitions agree; the difference on these orders is exactly the recorded refund."
+            ),
+            "affected": [o.order_number for o in identity],
+            "expected_contribution": money(-sum((o.refund for o in identity), ZERO)),
+        },
+        {
+            "id": "C3",
+            "category": "amount_mismatch",
+            "expected_status": "confirmed",
+            "rule_id": "data.value_mismatch",
+            "description": (
+                "Settlement amounts with a keying error. On refunded orders the difference is refund + error, which is "
+                "not exactly the refund, so the whole difference stays a mismatch rather than being split by guesswork."
+            ),
+            "affected": [o.order_number for o in errors],
+            "expected_contribution": money(mismatch),
+        },
+    ]
+    members = {
+        "C1": {o.order_number for o in split},
+        "C2": {o.order_number for o in identity},
+        "C3": {o.order_number for o in errors},
+    }
+    overlaps = [
+        {"order_number": n, "issues": [k for k, v in members.items() if n in v]}
+        for n in sorted(set().union(*members.values()))
+        if sum(n in v for v in members.values()) > 1
+    ]
+    return {
+        "id": "C",
+        "title": "Demo C: March gross revenue, sales query vs settlement export (refunds netted at source)",
+        "left": {"query": "sales_order_payments", "params": MARCH, "metric": GROSS_METRIC},
+        "right": {"file": SETTLEMENT_FILE, "mapping": SETTLEMENT_MAPPING, "metric": GROSS_METRIC},
+        "expected": {
+            "left_total": money(left_total),
+            "right_total": money(right_total),
+            "delta": money(right_total - left_total),
+            "unexplained": "0.00",
+        },
+        "issues": issues,
+        "overlaps": overlaps,
+        "overlap_rule": (
+            "Join copies are removed from the left before record matching; the refund identity is then tested on the "
+            "de-duplicated order, so a split and refunded order contributes once to C1 (its extra copy) and once to C2 "
+            "(its refund)."
+        ),
+    }
+
+
+FILE_BUILDERS = {LEDGER_FILE: ledger_csv, SETTLEMENT_FILE: settlement_csv}
+
+
 def manifest() -> dict:
     orders = build_orders()
     return {
@@ -295,13 +446,15 @@ def manifest() -> dict:
             "cancelled": sum(1 for o in orders if o.status == "cancelled"),
         },
         "delta_convention": "delta = right - left",
-        "scenarios": [scenario_a(orders), scenario_b(orders)],
+        "scenarios": [scenario_a(orders), scenario_b(orders), scenario_c(orders)],
     }
 
 
 def write(out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / LEDGER_FILE).write_bytes(ledger_csv(build_orders()))
+    orders = build_orders()
+    for name, build in FILE_BUILDERS.items():
+        (out_dir / name).write_bytes(build(orders))
     (out_dir / "manifest.json").write_text(json.dumps(manifest(), indent=2) + "\n")
 
 

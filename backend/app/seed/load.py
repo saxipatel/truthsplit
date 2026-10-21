@@ -23,7 +23,7 @@ from app.db.session import _session_factory
 from app.db.sources import snapshot_query
 from app.models import Dataset, Investigation, MetricDefinition
 from app.normalization.mapping import ColumnMapping
-from app.seed.demo import LEDGER_FILE, ledger_csv, manifest
+from app.seed.demo import FILE_BUILDERS, manifest
 from app.seed.shop import build_orders
 
 
@@ -47,11 +47,11 @@ def _snapshot(session: Session, settings: Settings, key: str, params: dict) -> D
     ).dataset
 
 
-def _ledger(session: Session, settings: Settings, mapping: dict) -> Dataset:
+def _file(session: Session, settings: Settings, name: str, mapping: dict) -> Dataset:
     stored = store_upload(
         session,
-        io.BytesIO(ledger_csv(build_orders())),
-        LEDGER_FILE,
+        io.BytesIO(FILE_BUILDERS[name](build_orders())),
+        name,
         storage_dir=settings.storage_dir,
         max_bytes=settings.max_upload_mb * 1024 * 1024,
     )
@@ -82,7 +82,7 @@ def load_demo(session: Session, settings: Settings) -> dict:
             dataset = (
                 _snapshot(session, settings, spec["query"], spec["params"])
                 if "query" in spec
-                else _ledger(session, settings, spec["mapping"])
+                else _file(session, settings, spec["file"], spec["mapping"])
             )
             sides.append(InvestigationSide(dataset, _metric(session, spec["metric"])))
         inv = _investigation(session, scenario["title"], *sides)
