@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.comparison.metrics import MetricEvaluationError, MetricSpec, Record, unmapped_fields
 from app.comparison.sql import metric_sql, query_hash
+from app.db import audit
 from app.diagnosis.autopsy import SideInput, run_autopsy
 from app.diagnosis.dna import REPLAY_STEPS, source_facts
 from app.models import (
@@ -221,6 +222,16 @@ def run_investigation(
     session.flush()
     if evidence_rows:
         session.execute(insert(EvidenceRecord), evidence_rows)
+    audit.record(
+        session,
+        "investigation.created",
+        "investigation",
+        investigation.id,
+        delta=str(result.delta),
+        unexplained=str(unexplained),
+        findings=len(drafts),
+        engine_version=ENGINE_VERSION,
+    )
     session.commit()
     session.expire_all()  # callers read back what was stored, at the stored numeric scale
     log.info(

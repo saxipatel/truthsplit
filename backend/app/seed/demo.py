@@ -27,6 +27,7 @@ SETTLEMENT_FILE = "settlement_march.csv"
 SETTLEMENT_COLUMNS = [
     "order_number",
     "settled_at",
+    "gross_amount",
     "net_amount",
     "refunded",
     "currency",
@@ -171,7 +172,8 @@ def _ledger_plan(fin: list[Order]) -> dict[str, list[Order]]:
         "fan_out": [o for i, o in enumerate(fin) if i % 410 == 200],
     }
     counts = Counter(o.id for group in plan.values() for o in group)
-    assert all(n == 1 for n in counts.values()), "planted problems must not overlap"
+    if any(n > 1 for n in counts.values()):
+        raise ValueError("planted problems must not overlap")
     return plan
 
 
@@ -222,7 +224,8 @@ def scenario_b(orders: list[Order]) -> dict:
     plan = _ledger_plan(fin)
     typos = [(o, _typo_delta(k)) for k, o in enumerate(plan["typo"])]
     for o, d in typos:  # the refund-identity rule must not mistake a typo for a refund
-        assert o.refund is None or abs(d) != o.refund
+        if o.refund is not None and abs(d) == o.refund:
+            raise ValueError(f"keying error on {o.order_number} would be indistinguishable from its refund")
     left_total = sum((net(o) for o in fin), ZERO)
     right_total = (
         left_total
@@ -318,8 +321,9 @@ def _settlement_plan(sales: list[Order]) -> dict[str, dict[int, Decimal]]:
         "plain_error": {o.id: Decimal("12.50") for i, o in enumerate(plain) if i % 600 == 77},
     }
     for o in refunded:
-        if o.id in plan["refund_plus_error"]:
-            assert abs(-o.refund + plan["refund_plus_error"][o.id]) != o.refund
+        error = plan["refund_plus_error"].get(o.id)
+        if error is not None and abs(-o.refund + error) == o.refund:
+            raise ValueError(f"keying error on {o.order_number} would be indistinguishable from its refund")
     return plan
 
 
@@ -336,6 +340,7 @@ def settlement_csv(orders: list[Order]) -> bytes:
             [
                 o.order_number,
                 o.ordered_at.isoformat(),
+                money(o.total_amount),
                 money(settled),
                 money(o.refund or ZERO),
                 "USD",

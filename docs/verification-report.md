@@ -162,3 +162,77 @@ SQL over the stored records independently reproduced both totals, the missing am
 - **No double counting:** in A, B and C, every key's attributed evidence sums to its actual difference, including the 12 overlapping orders in C.
 - **Mutation check repeated:** disabling the rule now fails 6 tests, including `test_scenario_c_engine_matches_manifest`. The code was restored and is identical to the commit.
 - **Live stack:** `make demo` loaded scenario C with the same totals and findings as the manifest.
+
+## Milestone 6 verification (2026-10-21)
+
+Same environment as Milestone 3.
+
+**Automated tests.** 312 passed, 0 failed, 0 skipped, 1 warning (the Starlette test-client deprecation notice), on Python 3.14.6 and 3.12.15. No end-to-end tests exist yet. `bandit` reports 0 issues; this follows two fixes made during verification: a `nosec` annotation the formatter had moved, and three generator `assert`s replaced with explicit errors.
+
+**Mutation checks.** Computing `resolved_amount` as a signed difference failed 2 unit tests. Letting a simulation modify its input records in place failed 2 (`test_inputs_are_never_modified`, `test_simulations_are_deterministic`). The code was restored after each.
+
+**Live checks.** All 30 passed, against the compose stack with the three demo investigations. The first run had 1 failure, and a second run exposed a check error:
+
+- *Defect, fixed:* investigations created before Milestone 6 had no `investigation.created` audit event. Migration `0004` backfills it, marked `backfilled: true`.
+- *Check error, fixed in the script:* the B similarity check assumed only demo investigations existed. The verification's own 100k investigation correctly scored 10 against B (3 shared confirmed rules + 1 suspected), so the check now compares demo investigations only.
+
+Simulation results against the manifest:
+
+| Simulation | Expected after-delta | Result | Affected rows |
+|---|---|---|---|
+| A: align left definition to right | 155,997.39 − 102,360.14 = 53,637.25 | exact | 393 (one finance row per refunded order) |
+| A: left refund policy → gross | 53,637.25 | exact | 393 |
+| A: remove join copies, right | 155,997.39 − 56,224.00 = 99,773.39 | exact | 244 |
+| B: remove exact duplicates, right | 3,255.50 − 3,166.56 = 88.94 | exact | 6 |
+| B: remove join copies, right (the suspected fan-out) | 3,255.50 − 5,113.00 = −1,857.50 | exact | 7 |
+| C: remove join copies, left | −159,249.32 + 56,224.00 = −103,025.32 | exact | 244 |
+| C: left refund policy → net (no refund column) | 422 | 422, naming `refund_amount` | |
+| B: align window (neither side has one) | no change | no change | 0 |
+
+- **Repeatability:** repeating a simulation returned an identical result.
+- **Nothing modified:** the md5 over investigations, findings, evidence, datasets and records, and the md5 over the source tables, were unchanged after all simulations and workflow actions.
+- **Workflow:** resolving without a note → 422; open → in_review → resolved (with note) → open worked; resolved → in_review → 422. Accepting the unexplained finding left its evidence status `unexplained`. History listed every event in order.
+- **Similarity among demo investigations:** A ranks C (5), then B (4); B ranks A (4), then C (3). Every point has a reason.
+- **Patterns:** join amplification recurs in 3 investigations (2 confirmed, 1 suspected).
+- **Secrets:** no password in 31 API responses or in the logs.
+
+**Performance, 100k × 100k** (same synthetic data as Milestone 3). Investigation 1.70 s; simulation (`remove_duplicates`, right) 2.29 s, removing exactly the 475 duplicate rows' amount.
+
+## Milestone 6 final verification (2026-10-21)
+
+**Automated tests.** 324 passed, 0 failed, 0 skipped, 1 warning (Starlette test-client deprecation), on Python 3.14.6 and 3.12.15. `alembic check` finds no drift, the head is `0004`, and `bandit` reports 0 issues.
+
+**All five corrections on demo data** (`tests/integration/test_simulations_demo.py`). Expected before and after values for left, right and delta are computed from the pure-Python source model, not the engine. Every value matched exactly:
+
+| Correction | Demo case | Expected after-delta (model) | Affected rows |
+|---|---|---|---|
+| `remove_duplicates`, join copies | A, right | sales one copy per order − finance net | 244 (one dropped copy per split order) |
+| `remove_duplicates`, exact | B, right | ledger total − net of the 6 duplicated orders − finance net | 6 |
+| `refund_policy` → gross | A, left | sales rows − finance gross | 393 (refunded finance orders) |
+| `align_definition` | A, left | same as above | 393 |
+| `adjust_mapping` net → `gross_amount` | C, right | −56,224.00, i.e. only C1's join copies remain | 399 (384 refunded + 15 keying errors) |
+| `align_window` NY → UTC | settlement export compared with itself | 0, from Σ settled amount of orders before 05:00 UTC on 1 March | the orders in that gap |
+
+`resolved_amount = |before| − |after|` and `delta_change = after − before` were checked on every simulation.
+
+**Nothing modified.** Uploaded files on disk still hash to their recorded SHA-256. The md5 over investigations, findings, evidence, datasets and records, and the md5 over the source tables, were identical after every simulation.
+
+**Persistence, repeats and errors.**
+- A repeated simulation returns an identical result under a new id, `GET /api/simulations/{id}` returns what was stored, and each run adds a `simulation.run` audit event.
+- Seven invalid corrections return 422 and store nothing: an unknown kind or policy, a missing side, `adjust_mapping` on a query snapshot or to a missing column, a refund policy needing an unmapped column, and a mapping that rejects every row.
+
+**Defect found and fixed.** `adjust_mapping` to a column whose values all fail validation (amount → `processor_ref`) previously returned 201 with right = 0. It now returns 422 ("the new mapping rejects every row…"). A partially rejected remap is accepted and reports `rows_read`, `rows_accepted`, `rows_rejected` and the first issues in `result_json.remap`; a test covers 3 rows read, 2 accepted, 1 rejected.
+
+**Workflow and notes.** Status transitions, notes required to resolve, and accepting and rejecting a finding (the finding is unchanged, the audit event names the actor, decision and rule) all work, with complete ordered history. Blank notes and findings from other investigations return 422.
+
+**Similarity.** Point scores with listed reasons. Among the demo investigations, A ranks C (5) then B (4); B ranks A (4) then C (3); C ranks A (5) then B (3). An accepted diagnosis appears as a suggestion and never changes another investigation.
+
+**Refund identity (Milestone 5 follow-up).** Still supported (decision 27), with passing regression tests: four `TestRefundPolicy` tests, six boundary tests, and the scenario C manifest and SQL tests.
+
+**Live stack.** All 31 live checks passed. Services healthy, migrations at `0004 (head)`, no password in 32 API responses or the logs.
+
+**Remaining limitations.**
+- Simulations recompute both the baseline and the simulated autopsy, taking about 2.3 s on 100k × 100k rows, and results are not cached.
+- `adjust_mapping` is limited to file datasets.
+- Similarity weights are fixed judgement calls.
+- Audit actors are free-text names, because there is no authentication.

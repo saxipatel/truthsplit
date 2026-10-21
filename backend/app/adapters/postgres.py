@@ -219,9 +219,8 @@ def run_registered_query(
     More than `max_rows` rows is an error unless `preview` is set, in which case only the first rows return."""
     # Wrapping the registered SQL as a subquery means exactly one SELECT statement executes. Ordering by the
     # row value sorts on every column in turn, so the same data always yields the same snapshot.
-    wrapped = text(
-        f"SELECT * FROM ({query.sql}) AS registered_query ORDER BY registered_query LIMIT :__limit"
-    )  # nosec B608
+    sql = f"SELECT * FROM ({query.sql}) AS registered_query ORDER BY registered_query LIMIT :__limit"  # nosec B608
+    wrapped = text(sql)
     limit = max_rows if preview else max_rows + 1
     with read_only_connection(profile, settings) as conn:
         report = _require_safe(conn, profile)

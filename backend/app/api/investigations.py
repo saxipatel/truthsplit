@@ -13,6 +13,7 @@ from app.comparison.metrics import MetricEvaluationError, MetricSpec
 from app.db.investigations import InvestigationSide, create_metric_definition, run_investigation
 from app.diagnosis import dna
 from app.models import ComparisonResult, Dataset, EvidenceRecord, Finding, Investigation, MetricDefinition
+from app.models.investigations import FindingType, InvestigationStatus
 from app.schemas.imports import Page
 from app.schemas.investigations import (
     ComparisonOut,
@@ -104,12 +105,26 @@ def _detail(session, inv: Investigation) -> InvestigationOut:
 
 
 @router.get("/investigations", response_model=list[InvestigationSummary])
-def list_investigations(session: SessionDep, offset: Offset = 0, limit: Limit = 100) -> list[Investigation]:
-    return list(
-        session.scalars(
-            select(Investigation).order_by(Investigation.created_at.desc()).offset(offset).limit(limit)
-        )
-    )
+def list_investigations(
+    session: SessionDep,
+    offset: Offset = 0,
+    limit: Limit = 100,
+    status_filter: Annotated[InvestigationStatus | None, Query(alias="status")] = None,
+    q: Annotated[str | None, Query(max_length=200, description="Case-insensitive title search")] = None,
+    finding_type: FindingType | None = None,
+    is_demo: bool | None = None,
+) -> list[Investigation]:
+    stmt = select(Investigation)
+    if status_filter is not None:
+        stmt = stmt.where(Investigation.status == status_filter)
+    if q:
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        stmt = stmt.where(Investigation.title.ilike(f"%{escaped}%", escape="\\"))
+    if finding_type is not None:
+        stmt = stmt.where(Investigation.findings.any(Finding.type == finding_type))
+    if is_demo is not None:
+        stmt = stmt.where(Investigation.is_demo.is_(is_demo))
+    return list(session.scalars(stmt.order_by(Investigation.created_at.desc()).offset(offset).limit(limit)))
 
 
 @router.get("/investigations/{investigation_id}", response_model=InvestigationOut)

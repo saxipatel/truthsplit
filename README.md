@@ -2,7 +2,7 @@
 
 TruthSplit investigates why two reports of the same business metric disagree. It explains the gap between them with record-level evidence and reports whatever it cannot explain as an unexplained remainder.
 
-**Status: in development.** In place so far: the Docker Compose stack, PostgreSQL schema and migrations, health checks, the file import API (CSV / XLSX / XLS upload, preview, column mapping, normalization), the comparison engine (metric definitions, record-level reconciliation, investigations with evidence), read-only PostgreSQL sources (registered queries snapshotted into datasets, so files and queries can be compared in any combination), and the Difference Autopsy (definition replay, join amplification, cutoff and refund rules, evidence status). Simulation, investigation memory, reports and most of the UI are not built yet.
+**Status: in development.** In place so far: the Docker Compose stack, PostgreSQL schema and migrations, health checks, the file import API (CSV / XLSX / XLS upload, preview, column mapping, normalization), the comparison engine (metric definitions, record-level reconciliation, investigations with evidence), read-only PostgreSQL sources (registered queries snapshotted into datasets, so files and queries can be compared in any combination), the Difference Autopsy (definition replay, join amplification, cutoff and refund rules, evidence status), the what-if simulator and investigation memory (status workflow, resolution notes, audit history, recurring patterns, rule-based similar investigations). Reports and most of the UI are not built yet.
 
 ## Running locally
 
@@ -64,6 +64,19 @@ make seed-source
 ```
 
 How differences are attributed, and what `confirmed`, `suspected` and `unexplained` mean, is in [docs/difference-autopsy.md](docs/difference-autopsy.md). Parsing and validation rules are in [docs/metric-contract.md](docs/metric-contract.md). Measured import times are in [docs/verification-report.md](docs/verification-report.md).
+
+## Simulation and memory API
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` / `GET` | `/api/investigations/{id}/simulations` | Apply one correction to in-memory copies and re-run the autopsy; nothing but the simulation record is written. |
+| `PATCH` | `/api/investigations/{id}/status` | open, in_review, resolved, archived (resolving needs a note). |
+| `POST` / `GET` | `/api/investigations/{id}/notes` | Accept or reject a finding, or comment. |
+| `GET` | `/api/investigations/{id}/history` | Audit trail. |
+| `GET` | `/api/investigations/{id}/similar` | Rule-based similar investigations with reasons, and accepted diagnoses from them as suggestions. |
+| `GET` | `/api/memory/patterns` | Recurring finding types and rules across investigations. |
+
+Details are in [docs/simulation-and-memory.md](docs/simulation-and-memory.md).
 
 ## Demo
 

@@ -334,3 +334,57 @@ Each entry records a decision made while building TruthSplit, the context for it
 - One refund can appear in two findings when a netted source is also measured net (double deduction). The two mechanisms are real and their sum equals the difference.
 
 **Consequences.** Demo scenario C (384 refund-identity orders, 10 also split by payments, 15 keying errors) and six boundary unit tests cover the rule. With the rule disabled, 6 tests now fail instead of 1.
+
+## 28. Simulations run on in-memory copies and verify their baseline first
+
+**Decision.** A simulation loads the investigation's stored snapshots, applies one rule to in-memory copies, and runs the autopsy again. It first checks that each dataset still has the fingerprint recorded with the investigation, and that re-evaluating the inputs reproduces the stored baseline exactly. Only a `simulations` row and an audit event are written.
+
+**Context.** The blueprint requires simulations on immutable copies, a preserved baseline, and exact before/after numbers.
+
+**Alternatives.** Re-query live sources; write simulated datasets or investigations.
+
+**Reason.** Snapshots are immutable, so in-memory copies are enough and leave nothing to clean up. The baseline check turns any drift (an engine change, a corrupted dataset) into an explicit error, instead of a "before" number that silently differs from the stored investigation.
+
+**Trade-offs.** A simulation re-runs both the baseline and the simulated autopsy, so it takes about twice as long as one investigation: 2.3 s on 100k × 100k rows. Results aren't cached.
+
+**Consequences.** Verification compared an md5 over investigations, findings, evidence, datasets and records before and after 10 simulations: unchanged.
+
+## 29. `resolved_amount` is the reduction in the absolute gap
+
+**Decision.** `resolved_amount = |before_delta| − |after_delta|`; the signed change `after − before` is stored as `delta_change`.
+
+**Reason.** "How much of the gap does this fix close" is the question a user asks, and it shouldn't depend on which side is left. A change that overshoots or widens the gap shows as negative rather than as a misleading positive.
+
+## 30. Human review is recorded beside the evidence, not merged into it
+
+**Decision.** Status changes and notes (accepted, rejected, comment) are stored in `resolution_notes` and `audit_events`. They never modify a finding's `evidence_status`. Accepted diagnoses from similar investigations are shown as suggestions only.
+
+**Context.** The blueprint says memory should suggest similar patterns and never auto-confirm.
+
+**Reason.** Evidence status is a statement about what the data proves; acceptance is a statement about what a person decided. Keeping them separate means a later reader can tell the two apart.
+
+## 31. Similarity by explained point scoring
+
+**Decision.** Similar investigations are ranked by fixed points for shared confirmed rules (+3), suspected rules (+1), metric names (+2), sources (+2) and differing Metric DNA fields (+1), and every point is listed as a reason.
+
+**Alternatives.** Text similarity on titles; embeddings or a learned model.
+
+**Reason.** The goal is to surface "we've seen this before" with an explanation a reviewer can check. Fixed rules are deterministic and testable, and they don't claim more than they do.
+
+**Trade-offs.** The weights are judgement calls, not tuned. Investigations with very common rules (for example `data.value_mismatch`) can rank high on that alone; the listed reasons make this visible.
+
+## 32. Backfilled audit events are marked
+
+**Decision.** Migration `0004` adds an `investigation.created` event for investigations created before auditing existed. It uses the investigation's own `created_at`, actor `system` and `metadata_json.backfilled = true`.
+
+**Context.** Found during Milestone 6 verification: older investigations had a history that started with later events.
+
+**Reason.** A complete history is more useful, but an event added afterwards must not pass for one recorded at the time.
+
+## 33. A remap that rejects every row is refused; partial rejections are reported
+
+**Decision.** `adjust_mapping` fails with 422 when the new mapping leaves no valid rows. Otherwise the simulation records rows read, accepted and rejected, and the first issues, in `result_json.remap`.
+
+**Context.** Found during Milestone 6 verification: mapping the amount to a text column produced a simulation where the right side was simply zero. It looked like a result, but it was an artefact of rejected rows.
+
+**Reason.** This follows the import policy (decision 6): rejected rows are never silently dropped. A simulation is a what-if, so a partial rejection may be intended, but the user has to be able to see it.
