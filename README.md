@@ -2,14 +2,14 @@
 
 TruthSplit investigates why two reports of the same business metric disagree. It explains the gap between them with record-level evidence and reports whatever it cannot explain as an unexplained remainder.
 
-**Status: in development.** In place so far: the Docker Compose stack, PostgreSQL schema and migrations, health checks, the file import API (CSV / XLSX / XLS upload, preview, column mapping, normalization), and the comparison engine (metric definitions, record-level reconciliation, investigations with evidence). Root-cause diagnosis, the database source mode, simulation, reports and most of the UI are not built yet.
+**Status: in development.** In place so far: the Docker Compose stack, PostgreSQL schema and migrations, health checks, the file import API (CSV / XLSX / XLS upload, preview, column mapping, normalization), the comparison engine (metric definitions, record-level reconciliation, investigations with evidence), and read-only PostgreSQL sources (registered queries snapshotted into datasets, so files and queries can be compared in any combination). Root-cause diagnosis, simulation, reports and most of the UI are not built yet.
 
 ## Running locally
 
 Requires Docker with Compose v2.
 
 ```bash
-cp .env.example .env      # then change the passwords
+scripts/generate_env.sh   # writes .env with random database passwords
 docker compose up -d --build
 ```
 
@@ -41,6 +41,26 @@ The backend container runs `alembic upgrade head` before it starts.
 | `GET` | `/api/investigations`, `/api/investigations/{id}` | Stored investigations with totals, key statistics and findings. |
 | `GET` | `/api/investigations/{id}/findings/{finding_id}/evidence` | Per-key evidence with source row numbers, paginated. |
 | `GET` | `/api/investigations/{id}/evidence.csv` | All evidence rows as CSV. |
+
+## Database sources
+
+TruthSplit reads source databases only through **registered queries**: SQL defined in `backend/app/adapters/registered_queries.py`, with typed parameters. Users choose a query and supply parameter values; they can't submit SQL. Connections come from `TRUTHSPLIT_SOURCE_<NAME>_URL` environment variables, and the compose file defines `demo`, which points at the seeded `shop` database as `ts_reader`. Controls are described in [docs/security.md](docs/security.md).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/connections` | Configured sources (host and database only, never credentials). |
+| `POST` | `/api/connections/{name}/test` | Connect and report the role's privileges. `ok` is false for any role that could write. |
+| `GET` | `/api/connections/{name}/catalog` | Tables and columns the role may read. |
+| `GET` | `/api/registered-queries` | Queries with their SQL, hash, parameters, tables, joins and grain. |
+| `POST` | `/api/registered-queries/{key}/preview` | First 50 rows for the given parameters. |
+| `POST` | `/api/registered-queries/{key}/snapshots` | Run the query and store its result as a dataset. |
+| `POST` | `/api/datasets/{id}/freshness` | Re-run a snapshot's query and report whether the source data or the registered SQL has changed. |
+
+Snapshots are ordinary datasets, so `POST /api/investigations` compares any two of CSV, XLSX, XLS and query snapshots. To reset the demo source data:
+
+```bash
+make seed-source
+```
 
 Parsing and validation rules are in [docs/metric-contract.md](docs/metric-contract.md). Measured import times are in [docs/verification-report.md](docs/verification-report.md).
 

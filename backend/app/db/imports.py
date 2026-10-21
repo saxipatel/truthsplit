@@ -189,6 +189,12 @@ def create_dataset(
         rejected_row_count=result.rejected_rows,
         is_demo=is_demo,
     )
+    return store_dataset(session, dataset, result)
+
+
+def store_dataset(session: Session, dataset: Dataset, result: NormalizationResult) -> ImportOutcome:
+    """Persist a dataset, its records and import issues atomically. A concurrent import of the same
+    fingerprint wins the unique constraint and this call returns that dataset instead."""
     session.add(dataset)
     session.flush()
     _copy_records(session, dataset.id, result)
@@ -206,9 +212,8 @@ def create_dataset(
         session.commit()
     except IntegrityError:
         session.rollback()
-        return ImportOutcome(
-            session.scalar(select(Dataset).where(Dataset.fingerprint == fingerprint)), created=False
-        )
+        existing = session.scalar(select(Dataset).where(Dataset.fingerprint == dataset.fingerprint))
+        return ImportOutcome(existing, created=False)
     # Planner statistics are stale right after a bulk COPY. Without this, ad-hoc and proof queries over a
     # fresh dataset can pick nested-loop plans (measured: >2 min instead of <1 s on 2 x 100k rows).
     session.execute(text("ANALYZE dataset_records"))

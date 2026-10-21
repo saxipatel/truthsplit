@@ -199,3 +199,73 @@ Each entry records a decision made while building TruthSplit, the context for it
 **Context.** They hold per-key totals, not single record values, so a key with several large rows overflowed numeric(18,4), as found in verification.
 
 **Consequences.** Record-level columns stay numeric(18,4), matching the normalized record contract. Every column that holds a sum is numeric(24,4).
+
+## 16. Registered queries only, not arbitrary SELECT
+
+**Decision.** Source databases are read only through queries registered in code. Each has typed parameters, a column mapping, and metadata: tables, joins with cardinality, and output grain.
+
+**Context.** The original brief allowed "controlled read-only query execution"; the blueprint says "no user-provided arbitrary SQL execution". A query starting with SELECT is not safe by construction: functions, locking clauses and data-modifying CTEs can all hide behind it.
+
+**Alternatives.** Accept user SQL and validate it with a parser such as sqlglot.
+
+**Reason.** A parser-based allowlist is hard to make complete (functions with side effects, dialect corners), and the blueprint chose the stricter option. Registered queries also give Metric DNA real metadata about joins and grain, rather than metadata inferred from arbitrary SQL.
+
+**Trade-offs.** Adding a query is a code change and a review, not a form.
+
+**Consequences.** Users choose a query and parameter values. The SQL text and its hash are shown, and stored with every snapshot.
+
+## 17. Check the role's privileges before every query
+
+**Decision.** Each source query first inspects the login role (`pg_roles`, `has_*_privilege`), and refuses to run if the role could write or escalate.
+
+**Context.** Read-only transactions stop writes but not everything: a superuser can turn them off, `COPY ... TO PROGRAM` needs only superuser, and a mis-configured profile is an easy mistake.
+
+**Alternatives.** Check only in the connection test; trust the operator.
+
+**Reason.** The check is one small query per run, and it turns a configuration mistake into a clear error instead of a latent risk.
+
+**Trade-offs.** Roles that hold write grants they never use are refused. That is deliberate.
+
+**Consequences.** The compose superuser is refused in tests, and only a dedicated SELECT-only login works.
+
+## 18. Snapshot query results into datasets
+
+**Decision.** Running a registered query stores its result as a `datasets` row with normalized `dataset_records`, plus provenance: source connection, query key, parameters, the hash of the SQL plus parameters, the content hash, executed_at, server version and role.
+
+**Context.** Investigations must be reproducible later, after the source data has changed.
+
+**Alternatives.** Re-run the query whenever an investigation is opened.
+
+**Reason.** A live query can return different data tomorrow, which would silently change stored findings. Snapshots also let file and query inputs share the whole comparison engine.
+
+**Trade-offs.** Storage grows with each distinct result. Unchanged results are deduplicated by fingerprint (query + parameters + content).
+
+**Consequences.** Results are ordered by the entire row (`ORDER BY registered_query`), so row numbers in a snapshot are stable for the same data. Query values go through the same strict normalizers as file cells.
+
+## 19. Upstream failures are 502, limits are 422
+
+**Decision.** Connection failures, refusals and query errors from a source return 502 with a sanitized message. Exceeding the row limit returns 422.
+
+**Reason.** The first group is a fault of the upstream system or its configuration. A row limit is a property of the request (choose a narrower window).
+
+## 20. Snapshots are immutable; staleness is checked, not hidden
+
+**Decision.** A snapshot never changes after it is taken. `POST /api/datasets/{id}/freshness` re-runs the snapshot's registered query with its stored parameters and compares a hash of the fully sorted result. It reports `current`, `source_changed`, `query_changed` (the registered SQL's hash no longer matches, so the query is not re-run), or `query_removed`.
+
+**Context.** Investigations must stay reproducible, yet users need to know when a snapshot no longer reflects the source.
+
+**Alternatives.** Refresh snapshots in place; refresh on a schedule; re-query every time an investigation is opened.
+
+**Reason.** Refreshing in place would silently change stored findings. An explicit check makes staleness visible, and keeps the decision to re-run with the user.
+
+**Trade-offs.** A freshness check costs a full query run. Nothing warns automatically; the check must be requested. The planned UI will show the snapshot time and offer the check.
+
+**Consequences.** Re-snapshotting changed data creates a new dataset. Comparing the old and new snapshots is itself an investigation, and verification used one to show a single +10.00 source edit.
+
+## 21. Generated local credentials
+
+**Decision.** `scripts/generate_env.sh` creates `.env` with random passwords. `.env.example` keeps obvious placeholders, and the README points to the script.
+
+**Context.** Found during Milestone 4 verification: copying `.env.example` made the committed placeholders the real passwords.
+
+**Consequences.** Passwords take effect when the database volumes are first created. Existing volumes need `ALTER ROLE` as well, which is what was done for this machine's stack.

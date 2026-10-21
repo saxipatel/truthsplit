@@ -9,9 +9,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TRUTHSPLIT_", env_file=".env", extra="ignore")
 
     database_url: str
-    # Connection URL for the "demo" source profile. Source credentials live only in the environment;
-    # the metadata database stores the profile name, never the URL.
-    source_demo_url: str | None = None
+    # Source connections are read from TRUTHSPLIT_SOURCE_<NAME>_URL (see app/adapters/postgres.py). Their
+    # credentials live only in the environment; the metadata database stores the profile name.
     allowed_source_hosts: str = "source-db,localhost,127.0.0.1"
 
     storage_dir: Path = Path("var/storage")

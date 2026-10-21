@@ -61,3 +61,39 @@ Environment: Apple M4 (10 cores), 16 GB RAM, macOS 26.6.2, Docker 29.7.2 (VM: 10
 | `POST /api/investigations`, runs 1–3 | 1.57 s, 1.51 s, 1.50 s |
 
 The three runs produced identical findings and proof hashes, and the findings sum to delta (−300,664.04). Backend peak RSS (`VmHWM`) was 359 MiB, covering both imports and all three runs; RSS afterwards was 182 MiB.
+
+## Milestone 4 verification (2026-10-20)
+
+Same environment as Milestone 3.
+
+**Automated tests.** 230 passed, 0 failed, 0 skipped, 1 warning (the Starlette test-client deprecation notice). Same result on Python 3.14.6 (host) and 3.12.15 (container). The first 3.12 run failed one test that hardcoded `localhost` as the source host; the test now reads the host from its URL.
+
+**Live checks.** The 72 live checks found one failure, a race: Docker had not yet marked the just-rebuilt backend "healthy". It was healthy when checked again. The checks ran against the compose stack, with the backend reaching `source-db` as `ts_reader`.
+
+- **Connections and queries:** the connection test reports `ts_reader` with no problems, and the catalog shows the 6 readable tables. The 3 registered queries carry SQL hash, parameters, joins and grain. Six bad parameter sets were rejected with 422: missing, unknown, `2026-02-30`, `' OR '1'='1`, `); DROP TABLE orders; --`, and a list in place of a date. Preview is capped at 50 rows.
+- **Snapshots:** the finance March snapshot has 2,882 rows, the same as an independent `ts_reader` read. The same query, parameters and data reuse the dataset (200, same id); different parameters create a new one. Provenance holds the SQL hash, content hash, executed_at, role and server version.
+- **File vs query:** expected values came from an independent read plus the edits the script made to the file copy.
+
+  | Comparison | Edits to the file copy | Result |
+  |---|---|---|
+  | CSV vs PostgreSQL | dropped 7 orders, changed 5 amounts, added 3 orders, duplicated 2 rows | delta 1,684.87 exact; extra 4,008.50, missing −1,049.06, duplicates −511.75, mismatch −762.82; unexplained 0 |
+  | XLSX vs PostgreSQL, net of refunds | dropped 2 orders, changed 1 amount | delta 1,358.19 exact; mismatch −5.25 |
+  | Unmodified XLSX copy vs PostgreSQL | none | zero delta, no findings |
+  | PostgreSQL vs PostgreSQL | none | both totals equal independent SUMs |
+
+- **Failure modes:**
+  - A wrong password returned a sanitized message, and the old placeholder password is rejected.
+  - Hosts 10.0.0.5, 169.254.169.254, metadata.google.internal and `db` were refused before any connection attempt.
+  - Registered SQL with two statements (42601), a data-modifying CTE (0A000), `FOR UPDATE` (25006) or `set_config('transaction_read_only','off')` (25001) did not execute, and the source was unchanged.
+  - A 300 ms statement timeout cancelled `pg_sleep(3)` after 0.31 s.
+  - With `source-db` stopped, the connection test and snapshot returned 502 immediately and nothing was stored. App health was unaffected.
+- **Source unchanged:** an md5 over every row of all 6 source tables was identical before and after all of the above.
+- **Staleness:** a fresh snapshot is `current`. After an admin changed one order by +10.00 it became `source_changed`. Re-snapshotting created a new dataset, and comparing the old and new snapshots showed exactly one +10.00 mismatch, with the old snapshot's records untouched. After re-running the seed script the old snapshot was `current` again, and the source was byte-identical to the original.
+- **Secrets:** no password appeared in any of the 43 API responses, in any container log, in git history or in tracked files. `.env` is git-ignored with mode 600.
+
+**Read-only enforcement through privileges alone.** With the session switched to `default_transaction_read_only = off`, `ts_reader` attempted 14 writes or escalations. These 12 failed with 42501 (insufficient privilege): INSERT, UPDATE, DELETE, TRUNCATE, CREATE TABLE, CREATE TEMP TABLE, ALTER TABLE, DROP TABLE, CREATE SCHEMA, CREATE FUNCTION, SELECT FOR UPDATE, and COPY TO file. The other two did not error:
+
+- `GRANT INSERT ON orders TO ts_reader` returns a warning and grants nothing. Afterwards the role still had only SELECT and write privileges on 0 tables.
+- `ALTER ROLE ts_reader SET default_transaction_read_only = off` **succeeds**. PostgreSQL lets any role change its own session defaults. It grants no write access, as the 42501 results above show, and TruthSplit cannot issue it because its queries run in a read-only transaction. The setting was restored. See the limitations in `docs/security.md`.
+
+**Credential rotation.** The local `.env` had been copied from `.env.example`, so the real database passwords were the committed placeholder strings. All three database passwords were rotated to random values with `ALTER ROLE` and written to `.env`. `scripts/generate_env.sh` now creates `.env` with random passwords for new setups.
