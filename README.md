@@ -244,6 +244,10 @@ truthsplit/
 └── docker-compose.dev.yml   # frontend dev-server override
 ```
 
+## Development
+
+AI-assisted development tools were used during implementation. The project includes documented architecture, engineering decisions, automated tests, and reproducible verification procedures.
+
 ## License
 
 [MIT](LICENSE) © 2026 TruthSplit contributors.
