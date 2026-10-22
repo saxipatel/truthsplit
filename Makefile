@@ -1,11 +1,15 @@
 # Test URLs point at the docker-compose databases, using the credentials in .env.
 -include .env
+COMPOSE_PROJECT_NAME ?= truthsplit
+NETWORK ?= $(COMPOSE_PROJECT_NAME)_default
+E2E_URL ?= http://frontend:8080
+PLAYWRIGHT_IMAGE ?= mcr.microsoft.com/playwright:v1.56.1-noble
 TEST_DB ?= postgresql+psycopg://$(APP_DB_USER):$(APP_DB_PASSWORD)@localhost:$(APP_DB_PORT)/truthsplit_test
 TEST_SOURCE ?= postgresql+psycopg://$(SOURCE_READER_USER):$(SOURCE_READER_PASSWORD)@localhost:$(SOURCE_DB_PORT)/$(SOURCE_DB_NAME)
 # Used only to check that a privileged login is refused.
 TEST_SOURCE_ADMIN ?= postgresql+psycopg://source_admin:$(SOURCE_DB_ADMIN_PASSWORD)@localhost:$(SOURCE_DB_PORT)/$(SOURCE_DB_NAME)
 
-.PHONY: env up down logs backend-venv test-db seed-source demo demo-files test e2e screenshots lint frontend-check
+.PHONY: env up down logs backend-venv test-db seed-source demo demo-files verify-demo test e2e screenshots lint frontend-check
 
 env:
 	@test -f .env || scripts/generate_env.sh
@@ -31,6 +35,9 @@ seed-source:
 demo:
 	docker compose exec -T backend python -m app.seed.load
 
+verify-demo:
+	python3 scripts/verify_demo.py http://localhost:$(or $(WEB_PORT),8080)
+
 demo-files:
 	cd backend && .venv/bin/python -m app.seed.demo ../sample_data
 
@@ -39,12 +46,12 @@ test: env test-db
 
 # End-to-end tests in the official Playwright image, against the running compose stack.
 e2e:
-	docker run --rm --network truthsplit_default -v "$(CURDIR)":/repo -v /repo/e2e/node_modules -w /repo/e2e -e E2E_BASE_URL=http://frontend:5173 \
-		mcr.microsoft.com/playwright:v1.49.1-jammy sh -c "npm ci --no-audit --no-fund && npx playwright test"
+	docker run --rm --network $(NETWORK) -v "$(CURDIR)":/repo -v /repo/e2e/node_modules -w /repo/e2e -e E2E_BASE_URL=$(E2E_URL) \
+		$(PLAYWRIGHT_IMAGE) sh -c "npm ci --no-audit --no-fund && npx playwright test"
 
 screenshots:
-	docker run --rm --network truthsplit_default -v "$(CURDIR)":/repo -v /repo/e2e/node_modules -w /repo/e2e -e E2E_BASE_URL=http://frontend:5173 -e SCREENSHOTS=1 \
-		mcr.microsoft.com/playwright:v1.49.1-jammy sh -c "npm ci --no-audit --no-fund && npx playwright test screenshots"
+	docker run --rm --network $(NETWORK) -v "$(CURDIR)":/repo -v /repo/e2e/node_modules -w /repo/e2e -e E2E_BASE_URL=$(E2E_URL) -e SCREENSHOTS=1 \
+		$(PLAYWRIGHT_IMAGE) sh -c "npm ci --no-audit --no-fund && npx playwright test screenshots"
 
 frontend-check:
 	docker run --rm -v "$(CURDIR)/frontend":/app -v /app/node_modules -w /app node:22-alpine sh -c "npm ci --no-audit --no-fund && npm run build && rm -rf dist"

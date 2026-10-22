@@ -1,0 +1,16 @@
+# Development override: replace the nginx frontend with the Vite dev server (hot reload on rebuild).
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    environment:
+      API_PROXY_TARGET: http://backend:8000
+    ports: !override
+      - "127.0.0.1:5173:5173"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5173/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

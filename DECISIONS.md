@@ -454,3 +454,39 @@ Each entry records a decision made while building TruthSplit, the context for it
 **Decision.** The What-if tab plots every saved simulation of the investigation as a dumbbell (before shade → after shade of one blue hue) on one axis with a zero line, numbered to match the table of saved simulations.
 
 **Reason.** All simulations start from the same stored baseline, so the chart answers "which correction closes the gap, and which widens it" at a glance. It uses only stored simulation results, so it shows what was actually run.
+
+## 42. Production frontend: static build behind nginx (supersedes the serving part of 37)
+
+**Decision.** `docker compose up` builds the frontend in a Node stage and serves `dist/` from `nginxinc/nginx-unprivileged:1.30-alpine` on port 8080. nginx proxies `/api/` and `/health/` to the backend and sets the security headers. The Vite dev server is still available through `docker-compose.dev.yml` (port 5173). Playwright now runs in `mcr.microsoft.com/playwright:v1.56.1-noble` against the nginx build.
+
+**Reason.** The dev server is not meant to serve users. A static build is smaller, has no Node runtime in the final image, and lets nginx own caching, compression, the request size cap and the Content-Security-Policy.
+
+**Consequences.** The UI moved from http://localhost:5173 to http://localhost:8080 (`WEB_PORT`). The e2e tests run against the same image users get. nginx's own 413 response returns the API's `{"detail": ...}` JSON shape, so the UI can show why an upload failed.
+
+## 43. CI on GitHub Actions: four jobs
+
+**Decision.** `.github/workflows/ci.yml` runs four jobs:
+- **backend:** ruff and pytest against the compose databases, Python 3.12;
+- **frontend:** `npm ci` and `npm run build`, which includes `tsc`;
+- **e2e:** builds the full production stack, checks that the three demos reproduce `sample_data/manifest.json` (`scripts/verify_demo.py`), runs Playwright, and uploads artifacts and container logs on failure;
+- **security:** gitleaks, bandit, pip-audit and npm audit.
+
+Each job generates its own random `.env` with `scripts/generate_env.sh`, so no secrets are stored in the repository or in GitHub.
+
+**Trade-offs.** The workflow was linted with actionlint and every step was run locally, but it has not run on GitHub yet, because the repository is not published. Image scanning (Trivy) is a documented manual step, not a CI job.
+
+## 44. Dependency upgrades for advisories, not pinning around them
+
+**Decision.** Upgrade react-router-dom 6 → 7.18.4 and Playwright 1.49 → 1.56.1 rather than accepting audit warnings, and move the nginx base from 1.27 to 1.30 (Trivy reported 57 fixable HIGH/CRITICAL OS-package findings in 1.27-alpine and none in 1.30-alpine).
+
+**Reason.** React Router 6 had moderate advisories (open redirect; SSR deserialization), and Playwright before 1.55.1 had a high-severity certificate-verification advisory. React Router 7 kept the `BrowserRouter` API this app uses, so the change was the version and the removal of the v7 future flags.
+
+**Consequences.** `npm audit` and `pip-audit` report no known vulnerabilities. The PostgreSQL image's `gosu` binary still carries Go standard-library advisories upstream; why that is not reachable is in [docs/security.md](docs/security.md).
+
+## 45. Benchmarks: generated, self-checking, through the HTTP API
+
+**Decision.** `scripts/benchmark.py` generates N-row CSV pairs from a fixed seed with planted differences (missing keys, changed amounts, exact duplicates, extra keys), then times upload, import, investigation, simulation, profile and HTML report through the public API. Every run checks that the findings equal the planted differences and that the remainder is 0; a fast but wrong run fails. Results are written to `docs/benchmarks/results.json` with the machine description.
+
+**Reason.** Numbers must be reproducible and must come from the same path users take, including nginx and multipart parsing. Checking correctness in the benchmark prevents reporting a speed-up that changed results.
+
+**Trade-offs.** One machine (Docker Desktop on a laptop), three runs per measurement, medians reported. These numbers are not a capacity guarantee.

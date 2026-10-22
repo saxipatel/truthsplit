@@ -1,99 +1,107 @@
 # TruthSplit
 
-TruthSplit investigates why two reports of the same business metric disagree. It explains the gap between them with record-level evidence and reports whatever it cannot explain as an unexplained remainder.
+**Evidence-based metric reconciliation.** TruthSplit explains why two reports of the same business metric disagree. It attributes the gap to concrete causes (definition differences, duplicated joins, reporting cutoffs, refund treatment, missing and extra records) and backs every amount with the source records that produce it. Whatever it cannot prove is reported as an **unexplained remainder**, never hidden.
 
-**Status: in development.** In place so far: the Docker Compose stack, PostgreSQL schema and migrations, health checks, the file import API (CSV / XLSX / XLS upload, preview, column mapping, normalization), the comparison engine (metric definitions, record-level reconciliation, investigations with evidence), read-only PostgreSQL sources (registered queries snapshotted into datasets, so files and queries can be compared in any combination), the Difference Autopsy (definition replay, join amplification, cutoff and refund rules, evidence status), the what-if simulator and investigation memory (status workflow, resolution notes, audit history, recurring patterns, rule-based similar investigations). exportable reports (JSON, HTML, evidence CSV), and a React frontend for all of it, with Playwright end-to-end tests. CI, screenshots and the final documentation pass are not done yet.
+![Difference Autopsy of demo A: a waterfall from 0 to the +155,997.39 difference](docs/screenshots/02-autopsy-fully-explained.png)
 
-## Running locally
+## Why
 
-Requires Docker with Compose v2.
+"Finance says March revenue was 1.40 M, Sales says 1.55 M." Both numbers are usually correct for their own definition. Reconciling them by hand means:
+- exporting both sides;
+- guessing at definitions;
+- matching records in a spreadsheet;
+- ending with a "close enough" explanation that nobody can check.
 
-```bash
-scripts/generate_env.sh   # writes .env with random database passwords
-docker compose up -d --build
+TruthSplit makes that process repeatable and auditable:
+
+- **Exact.** All money is `Decimal` end to end, from file parsing to database (`numeric`) to API (decimal strings) to UI (string formatting, BigInt addition). Totals reconcile to the cent.
+- **Additive.** The confirmed causes plus the unexplained remainder always sum exactly to the difference. The engine asserts it on every run.
+- **Evidence over guesses.** A cause is either **confirmed** (amount proven from records), **suspected** (plausible, no amount claimed) or **unexplained**. There are no confidence percentages.
+- **Read-only by construction.** Source databases are read only through registered, parameterized queries, in read-only transactions, with roles that cannot write.
+
+## Features
+
+| Area | What it does |
+|---|---|
+| **Sources** | CSV, XLSX and XLS upload: signature checks, encoding and sheet selection, preview with inferred types, column mapping, rejected values kept with row and reason. Read-only PostgreSQL **registered queries** snapshotted into immutable datasets, with freshness checks. Files and queries compare in any combination. |
+| **Metric DNA** | Versioned metric definitions (aggregation, value field, grain, filters, date window and time zone, refund policy, null policy), compared side by side with each difference stated in plain language. Each definition is also rendered as SQL, and that "proof query" is checked against the Python result. |
+| **Reconciliation** | Per-business-key matching: missing, extra, amount mismatch, exact duplicates, records without a key. |
+| **Difference Autopsy** | Ordered replay of definition differences (date window, filters, refund policy, grain, null policy, value field), with standalone amounts and overlap notes. Data rules: join amplification (confirmed only with declared 1:N join metadata), query-window cutoffs, refund identity. Reconciliation waterfall, evidence breakdown, paginated supporting records, CSV export. |
+| **What-if simulator** | Apply one correction (remove duplicates, align window, refund policy or definition, adjust mapping) to in-memory copies, re-run the autopsy, and compare before → after. Stored data is never changed. |
+| **Review and memory** | Review workflow (open, in review, resolved, archived), kept separate from evidence status. Accept or reject notes per finding, audit history, recurring patterns, and rule-based similar investigations with their accepted diagnoses. |
+| **Reports** | JSON and self-contained HTML (escaped, no scripts, restrictive CSP) with inputs and fingerprints, Metric DNA, findings, evidence samples, simulations, notes, history, proof SQL and limitations. |
+| **Synthetic demo** | Three investigations whose expected results were computed independently of the engine (`sample_data/manifest.json`): fully explained; unexplained remainder; refunds netted at source. |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    user([Browser]) -->|":8080"| web["nginx (non-root)<br/>static React build<br/>+ reverse proxy"]
+    web -->|"/api, /health"| api["FastAPI backend (non-root)<br/>normalization · Metric DNA ·<br/>reconciliation · autopsy · what-if"]
+    api --> db[("PostgreSQL 16<br/>metadata, records,<br/>findings, evidence")]
+    api -->|"registered queries,<br/>read-only role and transaction"| src[("Source PostgreSQL<br/>(demo 'shop')")]
+    api --> files[/"upload storage<br/>(content-addressed)"/]
 ```
 
-| Service | URL |
+Module map, investigation pipeline and the database ER diagram: [docs/architecture.md](docs/architecture.md).
+
+| Layer | Technology |
 |---|---|
-| Frontend | http://localhost:5173 |
-| API | http://localhost:8000 (`/health/live`, `/health/ready`, `/docs`) |
+| Backend | Python 3.12, FastAPI, SQLAlchemy 2, Alembic, psycopg 3, openpyxl and defusedxml, xlrd |
+| Database | PostgreSQL 16 (metadata) and a separate PostgreSQL 16 demo source |
+| Frontend | React 18, TypeScript, Vite 6, Tailwind CSS 4, Recharts, React Router 7 |
+| Serving | nginx 1.30 (unprivileged image): static build, gzip, immutable asset caching, security headers |
+| Tests | pytest (unit and integration against real PostgreSQL), Playwright (end to end against the production stack) |
+| CI | GitHub Actions: backend, frontend build, end to end, security (gitleaks, bandit, pip-audit, npm audit) |
+
+## Quick start
+
+Requirements:
+- Docker with Compose v2.
+- Python 3 (standard library only) to run the verification and benchmark scripts.
+
+Node and a backend virtualenv are needed only for development.
+
+```bash
+git clone <repository-url> truthsplit && cd truthsplit
+scripts/generate_env.sh                 # writes .env with random passwords (mode 600, git-ignored)
+docker compose up -d --build --wait     # builds and starts db, source-db, backend, frontend
+```
+
+Open **http://localhost:8080** and click **Load demo investigations** on the Overview page, or:
+
+```bash
+make demo          # load the three synthetic investigations
+make verify-demo   # check them against sample_data/manifest.json
+```
+
+| Service | Address |
+|---|---|
+| Web UI (nginx) | http://localhost:8080 (`WEB_PORT`) |
+| API, OpenAPI docs | http://localhost:8000/docs; health at `/health/live` and `/health/ready` |
 | Metadata database | `localhost:5433` |
 | Demo source database | `localhost:5434`; the backend connects only as the read-only `ts_reader` role |
 
-The backend container runs `alembic upgrade head` before it starts.
+All ports bind to 127.0.0.1. The backend runs `alembic upgrade head` on start. Stop with `docker compose down`; add `-v` to delete the data volumes.
 
-## File import API
-
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/api/imports/file` | Multipart upload. Validates type, signature and size; returns sheet names and a preview with inferred column types. |
-| `GET` | `/api/imports/{id}/preview?sheet=&encoding=` | Preview another worksheet or a CSV encoding. |
-| `POST` | `/api/datasets` | Apply a column mapping and import normalized records. |
-| `GET` | `/api/datasets`, `/api/datasets/{id}` | Datasets and their import summary. |
-| `GET` | `/api/datasets/{id}/records`, `/api/datasets/{id}/issues` | Normalized records and rejected values, paginated. |
-| `GET` | `/api/datasets/{id}/profile` | Aggregate statistics of the stored records (SQL over `dataset_records`). |
-
-## Report API
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/api/investigations/{id}/export?format=json\|html&download=true` | Full report: totals, inputs and fingerprints, Metric DNA, findings by evidence status with sample evidence, simulations, notes, history, recommended next steps, proof queries and limitations. The HTML is escaped, has no scripts and is served with a restrictive Content-Security-Policy. |
-| `GET` | `/api/settings` | Limits and allowed hosts (no credentials). |
-| `POST` | `/api/demo` | Load the demo investigations (idempotent). |
-
-## Comparison API
-
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` / `GET` | `/api/metric-definitions` | Create the next version of a named metric definition; list definitions. |
-| `GET` | `/api/metric-definitions/compare?left=&right=` | Metric DNA: two definitions side by side, with differences marked. |
-| `POST` | `/api/investigations` | Evaluate two (dataset, definition) inputs, reconcile them and store the result. |
-| `GET` | `/api/investigations`, `/api/investigations/{id}` | Stored investigations with totals, key statistics and findings. |
-| `GET` | `/api/investigations/{id}/findings/{finding_id}/evidence` | Per-key evidence with source row numbers, paginated. |
-| `GET` | `/api/investigations/{id}/evidence.csv` | All evidence rows as CSV. |
-
-## Database sources
-
-TruthSplit reads source databases only through **registered queries**: SQL defined in `backend/app/adapters/registered_queries.py`, with typed parameters. Users choose a query and supply parameter values; they can't submit SQL. Connections come from `TRUTHSPLIT_SOURCE_<NAME>_URL` environment variables, and the compose file defines `demo`, which points at the seeded `shop` database as `ts_reader`. Controls are described in [docs/security.md](docs/security.md).
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/api/connections` | Configured sources (host and database only, never credentials). |
-| `POST` | `/api/connections/{name}/test` | Connect and report the role's privileges. `ok` is false for any role that could write. |
-| `GET` | `/api/connections/{name}/catalog` | Tables and columns the role may read. |
-| `GET` | `/api/registered-queries` | Queries with their SQL, hash, parameters, tables, joins and grain. |
-| `POST` | `/api/registered-queries/{key}/preview` | First 50 rows for the given parameters. |
-| `POST` | `/api/registered-queries/{key}/snapshots` | Run the query and store its result as a dataset. |
-| `POST` | `/api/datasets/{id}/freshness` | Re-run a snapshot's query and report whether the source data or the registered SQL has changed. |
-
-Snapshots are ordinary datasets, so `POST /api/investigations` compares any two of CSV, XLSX, XLS and query snapshots. To reset the demo source data:
+**Frontend development** with hot reload (Vite on http://localhost:5173, proxying the API):
 
 ```bash
-make seed-source
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
-How differences are attributed, and what `confirmed`, `suspected` and `unexplained` mean, is in [docs/difference-autopsy.md](docs/difference-autopsy.md). Parsing and validation rules are in [docs/metric-contract.md](docs/metric-contract.md). Measured import times are in [docs/verification-report.md](docs/verification-report.md).
+## Demo workflow
 
-## Simulation and memory API
+1. **Overview → Load demo investigations.** This creates three synthetic investigations, labelled "Synthetic demo" everywhere they appear.
+2. **Demo A (fully explained).** Finance 1,397,648.86 vs Sales 1,553,646.25, a difference of +155,997.39. The waterfall breaks it down: refund treatment +102,360.14, join amplification +56,224.00, and two time-zone cutoffs (−9,604.00 and +7,017.25). The remainder is 0.00. Open a finding to see its calculation, its proof SQL and the exact records behind it.
+3. **Demo B (unexplained remainder).** Finance vs a ledger export: +3,255.50. Missing records, amount mismatches and duplicate exports are confirmed, and 996.75 stays unexplained. A possible join amplification is listed as suspected, without an amount, because no join metadata proves it.
+4. **Demo C (refunds netted at source).** A sales query vs a settlement export: −159,249.32. Three causes explain it fully: join copies (−56,224.00); refunds netted by the settlement, found by the refund identity, where a per-key difference equals that key's refund to the cent (−100,479.19); and amount mismatches (−2,546.13).
+5. **What-if tab.** In demo A, remove the join copies on the Sales side and the difference shrinks by exactly the join-amplification amount (56,224.00). The simulation is saved; the investigation is not changed.
+6. **Review tab.** Accept a finding with a note and set the status to resolved. The evidence label (fully explained / unexplained remainder) stays separate from the review status.
+7. **Report tab.** Download the HTML or JSON report, or the evidence CSV.
+8. **Your own data.** Use **New investigation**: upload two files (or snapshot a registered query), map the columns, choose or create metric definitions and run.
 
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` / `GET` | `/api/investigations/{id}/simulations` | Apply one correction to in-memory copies and re-run the autopsy; nothing but the simulation record is written. |
-| `PATCH` | `/api/investigations/{id}/status` | open, in_review, resolved, archived (resolving needs a note). |
-| `POST` / `GET` | `/api/investigations/{id}/notes` | Accept or reject a finding, or comment. |
-| `GET` | `/api/investigations/{id}/history` | Audit trail. |
-| `GET` | `/api/investigations/{id}/similar` | Rule-based similar investigations with reasons, and accepted diagnoses from them as suggestions. |
-| `GET` | `/api/memory/patterns` | Recurring finding types and rules across investigations. |
-
-Details are in [docs/simulation-and-memory.md](docs/simulation-and-memory.md).
-
-## Demo
-
-```bash
-make demo
-```
-
-This loads three **synthetic** investigations into the running stack: one fully explained by refund treatment, join duplication and reporting cutoffs; one with an unexplained remainder; and one where a source reports amounts already net of refunds. Their expected results are in [`sample_data/manifest.json`](sample_data/manifest.json), computed independently of the engine; see [sample_data/README.md](sample_data/README.md).
+The demo files are in [`sample_data/`](sample_data/README.md), and you can upload them yourself.
 
 ## Screenshots
 
@@ -101,65 +109,106 @@ Captured from the running application with the synthetic demo data (`make screen
 
 | | |
 |---|---|
-| ![Overview](docs/screenshots/01-overview.png) | **Overview:** fully explained vs unexplained remainder (from evidence) shown apart from review status, findings by evidence status, recurring discrepancies. |
-| ![Fully explained autopsy](docs/screenshots/02-autopsy-fully-explained.png) | **Difference Autopsy, demo A:** the reconciliation waterfall from 0 to the difference (+155,997.39) through refund treatment, join amplification and two cutoffs. |
+| ![Overview](docs/screenshots/01-overview.png) | **Overview:** evidence (fully explained vs unexplained remainder) shown apart from review status, findings by evidence status, recurring discrepancies. |
 | ![Autopsy with remainder](docs/screenshots/03-autopsy-unexplained-remainder.png) | **Demo B:** confirmed causes, an unexplained remainder of 996.75, and suspected findings that carry no amount. |
-| ![What-if](docs/screenshots/04-what-if-simulator.png) | **What-if simulator:** saved simulations as before → after differences (one widens the gap). |
-| ![Comparison](docs/screenshots/05-comparison-results.png) | **Comparison results:** inputs, record matching, Metric DNA, definition replay. |
-| ![Review](docs/screenshots/06-review-and-history.png) | **Review and history:** status, notes, audit trail, rule-based similar investigations. |
+| ![What-if](docs/screenshots/04-what-if-simulator.png) | **What-if simulator:** saved simulations as before → after differences. |
+| ![Comparison](docs/screenshots/05-comparison-results.png) | **Comparison results:** inputs and fingerprints, record matching, Metric DNA, definition replay. |
+| ![Review](docs/screenshots/06-review-and-history.png) | **Review and history:** status, notes, audit trail, similar investigations. |
 | ![Metric definitions](docs/screenshots/07-metric-definitions.png) | **Metric definitions:** versioned definitions and Metric DNA comparison. |
-| ![Sources](docs/screenshots/08-sources-databases.png) | **Sources:** connection tests, registered queries, snapshots. |
+| ![Sources](docs/screenshots/08-sources-databases.png) | **Sources:** connection test, registered queries, snapshots. |
 | ![History](docs/screenshots/09-history.png) | **History:** filters and recurring discrepancy patterns. |
-| ![Mobile](docs/screenshots/10-mobile-autopsy.png) | **Phone width (390px).** |
+| ![Mobile](docs/screenshots/10-mobile-autopsy.png) | **Phone width (390 px).** |
 
-## Frontend
+## Testing
 
-React, TypeScript, Vite, Tailwind CSS and Recharts, served at http://localhost:5173 by the compose stack. Every page reads from and writes to the API; there is no mock data.
+```bash
+make backend-venv && make lint && make test   # ruff, then pytest (needs the compose databases)
+make frontend-check                           # tsc + production build in a Node container
+make e2e                                      # Playwright in its official image, against the running stack
+make verify-demo                              # the three demos against sample_data/manifest.json
+```
 
-| Page | What it does |
+- **Backend:** unit tests for parsing, mapping, metric evaluation, matching, the autopsy and the what-if simulator. Integration tests against real PostgreSQL for:
+  - the API;
+  - Python ↔ SQL parity of metric definitions;
+  - the read-only source controls (privileged roles refused, write attempts failing, timeouts, row limits);
+  - uploads;
+  - the demos;
+  - reports.
+- **End to end:** every page without console errors or horizontal overflow at 375 px, a complete file investigation, database snapshots, review persistence, and the waterfall, evidence breakdown and profile checked against independently computed values.
+
+Latest verified results are in [docs/verification-report.md](docs/verification-report.md).
+
+## Security
+
+| Area | Controls |
 |---|---|
-| Overview | Fully explained vs with remainder (evidence), awaiting review vs formally resolved (review), findings by evidence status, recurring discrepancies, unresolved investigations, API and source health, demo loader. Amounts are never summed across investigations. |
-| New investigation | Wizard. Each side is an existing dataset, an uploaded file (preview, sheet, encoding, column mapping) or a registered-query snapshot. Then pick or create metric definitions, with a live Metric DNA comparison. |
-| Sources | File upload and import; per-dataset profile (keys, duplicates, amount and refund statistics, time range, currencies, statuses, attributes, rejected values by column); connection tests, catalog, registered-query preview and snapshot, freshness checks. |
-| Metric definitions | Versioned definitions; comparison that states each difference in plain language (refund treatment, aggregation, grain, filters, date window in local time and UTC) above the full side-by-side table; form for new versions. |
-| Investigation | Header shows **Evidence** (fully explained / unexplained remainder, computed) separately from **Review** status (open, in review, resolved, archived; set by a person). Tabs: comparison results (inputs, record matching, Metric DNA with plain-language differences, definition replay); Difference Autopsy (reconciliation waterfall with a running-totals table, evidence breakdown by confirmed / suspected / unexplained, finding cards with calculations and paginated supporting records, CSV download); What-if simulator (before → after chart of saved simulations, per-rule comparison); review and history; report (sandboxed HTML preview, JSON/HTML/CSV downloads). |
-| History | Filters by title, status, finding type and demo flag, plus a recurring-pattern chart and table. |
-| Settings | Limits and safety settings in effect; no credentials. |
+| Database access | Only registered SQL with typed, bound parameters runs; users cannot submit SQL. Before connecting: host allowlist, then role privileges inspected (refused if the role can write, create or escalate). The query runs in a `READ ONLY` transaction with statement and lock timeouts and a row limit. |
+| Credentials | Environment variables only; the database stores a profile name. Errors are sanitized. |
+| Uploads | Extension and signature checks, streaming size cap (nginx 30 MB, API 25 MB), row limit, defusedxml for XLSX, macro-enabled files refused. |
+| Web | Strict Content-Security-Policy, `nosniff`, frame and referrer policies, non-root containers, 127.0.0.1-only ports. |
+| CI checks | gitleaks, bandit, pip-audit, npm audit, plus Dependabot. |
 
-Money is shown from the API's exact decimal strings and never converted to floating point for display. Charts use numbers only for bar lengths, and every chart has a table with the exact values. Demo data is labelled "Synthetic demo" wherever it appears.
+The full threat model, the test that covers each control, the scan results and the known limitations are in [docs/security.md](docs/security.md).
 
-To check the frontend build (type check plus production build) in a Node container:
+## Limitations
 
-```bash
-make frontend-check
+- **Single-user local tool.** No authentication or rate limiting; do not expose it beyond localhost without an authenticating proxy and TLS.
+- **Single currency per comparison.** No FX conversion; mixed currencies are refused rather than summed.
+- **Supported formats.** PostgreSQL is the only database connector, and new registered queries are added in code (`backend/app/adapters/registered_queries.py`), not through the UI.
+- **Size limits.** Up to 250,000 rows per dataset (`TRUTHSPLIT_MAX_ROWS`) and 25 MB per upload. Investigations run in memory in the API process.
+- **Join amplification needs metadata.** It is confirmed only when the query declares a 1:N join; otherwise it is reported as suspected, without an amount.
+- **Similarity is rule-based.** Points come from shared confirmed or suspected rules, metric names, sources and Metric DNA differences; it is not a learned model.
+- **Snapshots are not refreshed automatically.** Use the freshness check.
+- **No dark theme.**
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Components, backend modules, investigation pipeline, ER diagram |
+| [docs/metric-contract.md](docs/metric-contract.md) | Normalized record contract: parsing, validation, precision, time zones |
+| [docs/difference-autopsy.md](docs/difference-autopsy.md) | Attribution order, rules, evidence statuses |
+| [docs/simulation-and-memory.md](docs/simulation-and-memory.md) | What-if rules, review workflow, patterns, similarity |
+| [docs/security.md](docs/security.md) | Threat model, controls and the tests that verify them, scans |
+| [docs/verification-report.md](docs/verification-report.md) | Per-milestone verification with measured results |
+| [sample_data/README.md](sample_data/README.md) | How the synthetic demo data and its expected results are produced |
+| [DECISIONS.md](DECISIONS.md) | Design decisions, alternatives and trade-offs |
+| [LEARNING_GUIDE.md](LEARNING_GUIDE.md) | Walkthrough of the code, a reading order and exercises |
+
+## Project structure
+
+```
+truthsplit/
+├── backend/
+│   ├── app/
+│   │   ├── adapters/        # file reading, PostgreSQL read-only access, registered queries
+│   │   ├── api/             # FastAPI routers
+│   │   ├── comparison/      # metric evaluation, key matching, proof SQL
+│   │   ├── diagnosis/       # Metric DNA, Difference Autopsy
+│   │   ├── simulation/      # what-if engine
+│   │   ├── memory/          # patterns, similarity, review
+│   │   ├── reporting/       # JSON/HTML reports
+│   │   ├── normalization/   # column mapping, value parsing
+│   │   ├── db/ models/ schemas/ core/
+│   │   └── seed/            # independent demo model and loader
+│   ├── migrations/          # Alembic 0001–0004
+│   └── tests/               # unit/ and integration/
+├── frontend/
+│   ├── src/                 # pages/, features/, components/, api/, lib/
+│   ├── nginx/               # production server config and security headers
+│   ├── Dockerfile           # production: Node build → nginx
+│   └── Dockerfile.dev       # Vite dev server
+├── e2e/                     # Playwright tests
+├── docker/source-db/        # demo source database: read-only role, seed
+├── sample_data/             # synthetic demo files and expected results
+├── scripts/                 # generate_env.sh, verify_demo.py, benchmark.py
+├── docs/                    # architecture, contracts, security, verification, screenshots
+├── .github/                 # CI workflow, Dependabot
+├── docker-compose.yml       # production-style local stack
+└── docker-compose.dev.yml   # frontend dev-server override
 ```
 
-## End-to-end tests
+## License
 
-Requires the stack to be running. Runs Playwright in its official container on the compose network:
-
-```bash
-make e2e
-```
-
-The tests cover:
-- every page loading without console errors, and no horizontal overflow at 375px on every page and investigation tab;
-- a file investigation: validation, upload and mapping, run, evidence, simulation that leaves the baseline unchanged after a reload, and report download;
-- an investigation of two database query snapshots, whose expected difference is read from the demo manifest;
-- review notes persisting across a reload;
-- the reconciliation waterfall for demos A, B and C: step amounts equal the manifest, running totals add up exactly (BigInt), the last equals the difference;
-- evidence-breakdown totals, evidence vs review status staying separate after a formal resolution, the before/after chart listing every saved simulation, the dataset profile against values computed from the CSV, Metric DNA difference statements and Overview KPIs.
-
-`make screenshots` re-captures `docs/screenshots/`.
-
-## Backend tests
-
-Requires Python 3.12+ and the compose databases running.
-
-```bash
-make backend-venv
-make test
-make lint
-```
-
-Tests that need a database are skipped unless `TRUTHSPLIT_TEST_DATABASE_URL` is set; `make test` sets it. The test database (`truthsplit_test`) is created on the compose `db` service and is reset by the test run.
+[MIT](LICENSE) © 2026 TruthSplit contributors.
