@@ -320,3 +320,57 @@ Simulation results against the manifest:
 - No dark theme.
 - On screens under 640px the in-chart value labels are hidden; the tables next to the charts carry the values.
 - The compose stack serves the Vite dev server.
+
+## Milestone 8: release verification (2026-10-22)
+
+**Fresh environment.** Commit `b9efa8e` was cloned into an empty directory and run as a separate Compose project (`truthsplit_fresh`). It had new volumes and new `.env` passwords from `scripts/generate_env.sh`, and the images were built with `docker compose build --no-cache`. Every check below ran against that clone; the original stack was stopped with its volumes kept.
+
+| Check | Result |
+|---|---|
+| `docker compose up -d --wait` | db, source-db, backend and frontend healthy; `/health/ready` reports database ok, schema revision 0004 |
+| Migrations | Fresh volume upgraded to 0004; `alembic check`: no new upgrade operations. On a scratch database, upgrade head → downgrade base → upgrade head ran 4 + 4 + 4 steps, followed by a clean `alembic check` |
+| Demo investigations (`make verify-demo`) | 36 of 36 checks pass: totals, difference, unexplained remainder, and every finding's amount and evidence status for demos A, B and C against `sample_data/manifest.json` |
+| Backend lint (`make lint`) | ruff check and ruff format: clean (83 files) |
+| Backend tests, Python 3.14 (`make test`) | **330 passed, 0 failed, 0 skipped, 1 warning** (Starlette test-client deprecation, third party) |
+| Backend tests, Python 3.12 (CI version, `python:3.12-slim` container) | **330 passed, 0 failed, 0 skipped, 1 warning** |
+| Frontend (`make frontend-check`) | `tsc` and `vite build` pass |
+| End to end (`make e2e`, Playwright 1.56.1, against nginx) | **20 passed, 0 failed, 1 skipped** (the screenshot capture, which runs only via `make screenshots`) |
+| Benchmarks | All sizes passed their correctness checks; results in [benchmarks.md](benchmarks.md) |
+
+The Python 3.12 run first failed with 20 failures and 29 errors. Both causes were in how it was run, not in the code: the container lacked `sample_data/`, and it reached the databases by service name, while the tests' source allowlist contains `localhost`, `127.0.0.1` and `host.docker.internal`. Run with the repository layout and `host.docker.internal`, it passed in full. CI runs the tests on the runner host against published ports, as `make test` does.
+
+**Production serving.**
+- nginx 1.30 runs as uid 101 and the backend as uid 1000.
+- SPA routes (e.g. `/investigations/<id>`) return `index.html`.
+- `/assets/*` are served with `Cache-Control: public, max-age=31536000, immutable`.
+- Responses carry a CSP, `nosniff`, `X-Frame-Options`, `Referrer-Policy` and `Permissions-Policy`, and `server_tokens` is off.
+
+**Security checks.**
+- gitleaks over all commits: no leaks. Over the working tree: only the generated passwords in the git-ignored `.env`.
+- bandit: 0 issues. pip-audit: no known vulnerabilities.
+- npm audit, frontend (including dev) and e2e: 0 vulnerabilities, after upgrading react-router-dom to 7.18.4 (two moderate advisories in v6) and Playwright to 1.56.1 (one high advisory before 1.55.1).
+- Trivy, fixable HIGH/CRITICAL:
+  - backend: 0;
+  - frontend on nginx 1.27-alpine: 57, so it was moved to 1.30-alpine, which has 0;
+  - `postgres:16-alpine`: 0 in OS packages, 26 in the upstream `gosu` binary (accepted; reasoning in [security.md](security.md)).
+- Database access, SQL execution and uploads are covered by the backend suite: 28 tests in `test_sources_api.py`, 4 in `test_source_role.py`, 36 in `test_files.py` and 18 in `test_imports_api.py`, all passing.
+- Through nginx:
+  - a 32 MB upload is refused by nginx with a JSON 413;
+  - a 26 MB upload is refused by the API with a JSON 413;
+  - a binary file named `.csv` is refused with 415.
+
+**Repository.**
+- No generated artifacts, dependencies, caches or secrets are tracked (163 files).
+- `.gitignore` also covers `.env.*` (except `.env.example`) and `*.log`.
+- Every declared dependency is imported.
+
+**Defects found during this milestone and fixed.**
+- nginx's 413 page was HTML, so the UI could show only "HTTP 413"; it now returns `{"detail": ...}`.
+- The Playwright default base URL still pointed at the dev server.
+- `docs/security.md` listed rate limiting as planned for this milestone; it was not built and is now listed under "Not in place".
+- The benchmark's memory probe matched its own shell and reported 1.5 MiB; it now takes the highest VmHWM in the container. The benchmark was re-run after the fix.
+- The README and learning guide described demos A and C incorrectly; corrected from the manifest.
+
+**Not verified.**
+- The GitHub Actions workflow has not run on GitHub; the repository is not published. It passes actionlint 1.7.7, and every step was run locally.
+- The rendered README on GitHub (the Mermaid diagrams were rendered locally with mermaid-cli 11.4.2).

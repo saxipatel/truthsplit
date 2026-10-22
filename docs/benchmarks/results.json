@@ -1,0 +1,112 @@
+{
+  "measured_at": "2026-10-22T14:01:34.736027+00:00",
+  "seed": 20261022,
+  "repeats": 3,
+  "base_url": "http://localhost:8080",
+  "environment": {
+    "python": "3.14.6",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "cpu": "Apple M4",
+    "docker": "29.7.2 \u00b7 VM 10 CPUs \u00b7 8319504384 bytes"
+  },
+  "backend_peak_rss_mib": 824.0,
+  "runs": [
+    {
+      "rows_left": 10000,
+      "rows_right": 10460,
+      "bytes_left": 653313,
+      "bytes_right": 682093,
+      "upload_left_s": 0.094,
+      "import_left_s": 0.389,
+      "upload_right_s": 0.014,
+      "import_right_s": 0.318,
+      "investigation_s": [
+        0.188,
+        0.167,
+        0.144
+      ],
+      "investigation_median_s": 0.167,
+      "delta": "-9932.0400",
+      "findings_checked": {
+        "missing_records": "-40891.89",
+        "extra_records": "5000",
+        "duplicate_records": "25863.85",
+        "amount_mismatch": "96"
+      },
+      "simulation_s": [
+        0.214,
+        0.188,
+        0.198
+      ],
+      "simulation_median_s": 0.198,
+      "profile_right_s": 0.054,
+      "report_html_s": 0.012,
+      "report_html_bytes": 16034
+    },
+    {
+      "rows_left": 100000,
+      "rows_right": 100055,
+      "bytes_left": 6632944,
+      "bytes_right": 6634737,
+      "upload_left_s": 0.06,
+      "import_left_s": 2.225,
+      "upload_right_s": 0.059,
+      "import_right_s": 2.149,
+      "investigation_s": [
+        1.749,
+        1.743,
+        1.648
+      ],
+      "investigation_median_s": 1.743,
+      "delta": "-211259.1900",
+      "findings_checked": {
+        "missing_records": "-490677.54",
+        "extra_records": "5000",
+        "duplicate_records": "273387.35",
+        "amount_mismatch": "1031"
+      },
+      "simulation_s": [
+        2.311,
+        2.353,
+        2.236
+      ],
+      "simulation_median_s": 2.311,
+      "profile_right_s": 0.246,
+      "report_html_s": 0.01,
+      "report_html_bytes": 16069
+    },
+    {
+      "rows_left": 250000,
+      "rows_right": 249241,
+      "bytes_left": 16748312,
+      "bytes_right": 16695324,
+      "upload_left_s": 0.1,
+      "import_left_s": 5.366,
+      "upload_right_s": 0.079,
+      "import_right_s": 6.465,
+      "investigation_s": [
+        4.608,
+        4.391,
+        4.562
+      ],
+      "investigation_median_s": 4.562,
+      "delta": "-637826.9300",
+      "findings_checked": {
+        "missing_records": "-1260970.76",
+        "extra_records": "5000",
+        "duplicate_records": "615692.83",
+        "amount_mismatch": "2451"
+      },
+      "simulation_s": [
+        6.004,
+        6.208,
+        5.888
+      ],
+      "simulation_median_s": 6.004,
+      "profile_right_s": 0.519,
+      "report_html_s": 0.032,
+      "report_html_bytes": 16087
+    }
+  ]
+}

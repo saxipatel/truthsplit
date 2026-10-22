@@ -94,11 +94,17 @@ class Api:
 
 
 def peak_rss_mib() -> float | None:
-    """Peak resident memory of the backend's uvicorn process (VmHWM), if Docker Compose is available."""
-    script = 'for p in /proc/[0-9]*; do case "$(tr "\\0" " " < $p/cmdline 2>/dev/null)" in *bin/uvicorn*) grep VmHWM $p/status;; esac; done'
+    """Peak resident memory (VmHWM) of the largest process in the backend container, which is the API server.
+
+    The highest value is taken rather than matching a command line, because the probe's own shell would match too.
+    """
     try:
-        out = subprocess.run(["docker", "compose", "exec", "-T", "backend", "sh", "-c", script], capture_output=True, text=True, timeout=30).stdout
-        return round(int(out.split()[1]) / 1024, 1)
+        out = subprocess.run(
+            ["docker", "compose", "exec", "-T", "backend", "sh", "-c", "cat /proc/[0-9]*/status 2>/dev/null"],
+            check=False, capture_output=True, text=True, timeout=30,
+        ).stdout
+        peaks = [int(line.split()[1]) for line in out.splitlines() if line.startswith("VmHWM:")]
+        return round(max(peaks) / 1024, 1)
     except (OSError, IndexError, ValueError, subprocess.TimeoutExpired):
         return None
 
@@ -110,8 +116,8 @@ def environment() -> dict:
         "docker": ["docker", "info", "--format", "{{.ServerVersion}} · VM {{.NCPU}} CPUs · {{.MemTotal}} bytes"],
     }.items():
         try:
-            env[key] = subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip() or None
-        except OSError:
+            env[key] = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=10).stdout.strip() or None
+        except (OSError, subprocess.TimeoutExpired):
             env[key] = None
     return env
 

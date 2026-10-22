@@ -137,7 +137,28 @@ make verify-demo                              # the three demos against sample_d
   - reports.
 - **End to end:** every page without console errors or horizontal overflow at 375 px, a complete file investigation, database snapshots, review persistence, and the waterfall, evidence breakdown and profile checked against independently computed values.
 
-Latest verified results are in [docs/verification-report.md](docs/verification-report.md).
+### Verified results (Milestone 8, fresh clone, 2026-10-22)
+
+| Suite | Passed | Failed | Skipped | Warnings |
+|---|---:|---:|---:|---:|
+| Backend (pytest, Python 3.12 and 3.14) | 330 | 0 | 0 | 1 (third-party deprecation) |
+| End to end (Playwright 1.56.1, production nginx build) | 20 | 0 | 1 (screenshot capture, opt-in) | 0 |
+| Demo reproduction (`make verify-demo`) | 36 checks | 0 | 0 | 0 |
+| Frontend type check and build | pass | | | |
+
+Details, including the defects found and fixed along the way, are in [docs/verification-report.md](docs/verification-report.md).
+
+## Performance
+
+Measured through the HTTP API on a fresh stack (Apple M4, Docker Desktop, one Uvicorn worker). Median of 3 runs, with every run's findings checked against the differences planted in the generated data:
+
+| Rows per side | Import (one file) | Investigation | What-if simulation | Profile |
+|---:|---:|---:|---:|---:|
+| 10,000 | 0.39 s | 0.17 s | 0.20 s | 0.05 s |
+| 100,000 | 2.23 s | 1.74 s | 2.31 s | 0.25 s |
+| 250,000 (the row limit) | 5.37 s | 4.56 s | 6.00 s | 0.52 s |
+
+Backend peak memory over the whole run: 824 MiB. Method, environment and limits are in [docs/benchmarks.md](docs/benchmarks.md); reproduce with `python3 scripts/benchmark.py`.
 
 ## Security
 
@@ -172,6 +193,7 @@ The full threat model, the test that covers each control, the scan results and t
 | [docs/simulation-and-memory.md](docs/simulation-and-memory.md) | What-if rules, review workflow, patterns, similarity |
 | [docs/security.md](docs/security.md) | Threat model, controls and the tests that verify them, scans |
 | [docs/verification-report.md](docs/verification-report.md) | Per-milestone verification with measured results |
+| [docs/benchmarks.md](docs/benchmarks.md) | Benchmark method, environment and measured results |
 | [sample_data/README.md](sample_data/README.md) | How the synthetic demo data and its expected results are produced |
 | [DECISIONS.md](DECISIONS.md) | Design decisions, alternatives and trade-offs |
 | [LEARNING_GUIDE.md](LEARNING_GUIDE.md) | Walkthrough of the code, a reading order and exercises |
