@@ -475,6 +475,8 @@ Each job generates its own random `.env` with `scripts/generate_env.sh`, so no s
 
 **Trade-offs.** The workflow was linted with actionlint and every step was run locally, but it has not run on GitHub yet, because the repository is not published. Image scanning (Trivy) is a documented manual step, not a CI job.
 
+**Update (2026-10-22).** After publication, the first run on `main` passed all four jobs; see the verification report.
+
 ## 44. Dependency upgrades for advisories, not pinning around them
 
 **Decision.** Upgrade react-router-dom 6 → 7.18.4 and Playwright 1.49 → 1.56.1 rather than accepting audit warnings, and move the nginx base from 1.27 to 1.30 (Trivy reported 57 fixable HIGH/CRITICAL OS-package findings in 1.27-alpine and none in 1.30-alpine).

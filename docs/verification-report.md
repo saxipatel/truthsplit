@@ -374,3 +374,16 @@ The Python 3.12 run first failed with 20 failures and 29 errors. Both causes wer
 **Not verified.**
 - The GitHub Actions workflow has not run on GitHub; the repository is not published. It passes actionlint 1.7.7, and every step was run locally.
 - The rendered README on GitHub (the Mermaid diagrams were rendered locally with mermaid-cli 11.4.2).
+
+## After publication (2026-10-22)
+
+Both "Not verified" items above were checked once the repository was published at https://github.com/saxipatel/truthsplit:
+
+- **GitHub Actions.** CI run #1 on `main` (commit `b86f84d`, [run 39805064485](https://github.com/saxipatel/truthsplit/actions/runs/39805064485)) passed all four jobs:
+  - backend: ruff clean, 330 passed, 1 warning, Python 3.12;
+  - frontend: type check and build;
+  - security: gitleaks no leaks, pip-audit and npm audit no known vulnerabilities;
+  - end to end: 36/36 demo checks; Playwright 20 passed, 1 skipped.
+
+  GitHub annotated two platform notices, neither a failure: `actions/checkout@v4` and `actions/setup-node@v4` target the deprecated Node 20 runtime, and `ubuntu-latest` is moving to Ubuntu 26.
+- **Rendered README.** On GitHub the README renders with all sections and its 10 screenshots; the Mermaid diagrams in the README and `docs/architecture.md` render.

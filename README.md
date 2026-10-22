@@ -1,6 +1,10 @@
 # TruthSplit
 
+[![CI](https://github.com/saxipatel/truthsplit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/saxipatel/truthsplit/actions/workflows/ci.yml)
+
 **Evidence-based metric reconciliation.** TruthSplit explains why two reports of the same business metric disagree. It attributes the gap to concrete causes (definition differences, duplicated joins, reporting cutoffs, refund treatment, missing and extra records) and backs every amount with the source records that produce it. Whatever it cannot prove is reported as an **unexplained remainder**, never hidden.
+
+**Stack:** Python, FastAPI, PostgreSQL, SQLAlchemy and Alembic on the backend; React and TypeScript on the frontend; Docker Compose with nginx; tested with pytest and Playwright in GitHub Actions.
 
 ![Difference Autopsy of demo A: a waterfall from 0 to the +155,997.39 difference](docs/screenshots/02-autopsy-fully-explained.png)
 
@@ -17,7 +21,7 @@ TruthSplit makes that process repeatable and auditable:
 - **Exact.** All money is `Decimal` end to end, from file parsing to database (`numeric`) to API (decimal strings) to UI (string formatting, BigInt addition). Totals reconcile to the cent.
 - **Additive.** The confirmed causes plus the unexplained remainder always sum exactly to the difference. The engine asserts it on every run.
 - **Evidence over guesses.** A cause is either **confirmed** (amount proven from records), **suspected** (plausible, no amount claimed) or **unexplained**. There are no confidence percentages.
-- **Read-only by construction.** Source databases are read only through registered, parameterized queries, in read-only transactions, with roles that cannot write.
+- **Read-only by design.** Source databases are read only through registered, parameterized queries, in read-only transactions, with roles that cannot write.
 
 ## Features
 
@@ -63,7 +67,7 @@ Requirements:
 Node and a backend virtualenv are needed only for development.
 
 ```bash
-git clone <repository-url> truthsplit && cd truthsplit
+git clone https://github.com/saxipatel/truthsplit.git && cd truthsplit
 scripts/generate_env.sh                 # writes .env with random passwords (mode 600, git-ignored)
 docker compose up -d --build --wait     # builds and starts db, source-db, backend, frontend
 ```
@@ -146,6 +150,8 @@ make verify-demo                              # the three demos against sample_d
 | Demo reproduction (`make verify-demo`) | 36 checks | 0 | 0 | 0 |
 | Frontend type check and build | pass | | | |
 
+**Continuous integration.** The first GitHub Actions run on `main` ([run #1](https://github.com/saxipatel/truthsplit/actions/runs/39805064485), commit `b86f84d`) passed all four jobs: backend (lint and 330 tests), frontend (type check and build), security (gitleaks, bandit, pip-audit, npm audit) and end to end (36/36 demo checks, 20 Playwright tests passed, 1 opt-in skipped) against the production Docker stack.
+
 Details, including the defects found and fixed along the way, are in [docs/verification-report.md](docs/verification-report.md).
 
 ## Performance
@@ -193,7 +199,6 @@ The full threat model, the test that covers each control, the scan results and t
 - **Benchmarks are from one machine.** They were measured on an Apple M4 laptop with Docker Desktop and a single API worker; concurrency was not tested. See [docs/benchmarks.md](docs/benchmarks.md).
 - **Builds are not fully pinned.** Python dependencies are lower bounds without a lock file, and Docker base images are referenced by tag, not digest; the frontend and e2e npm dependencies are locked.
 - **Recharts 2.x is deprecated upstream.** No advisory affects it today, but an upgrade to v3 is pending.
-- **CI has not yet run on GitHub.** The workflow passes actionlint and every step was run locally.
 - **No dark theme.**
 
 ## Documentation
