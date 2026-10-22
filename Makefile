@@ -5,7 +5,7 @@ TEST_SOURCE ?= postgresql+psycopg://$(SOURCE_READER_USER):$(SOURCE_READER_PASSWO
 # Used only to check that a privileged login is refused.
 TEST_SOURCE_ADMIN ?= postgresql+psycopg://source_admin:$(SOURCE_DB_ADMIN_PASSWORD)@localhost:$(SOURCE_DB_PORT)/$(SOURCE_DB_NAME)
 
-.PHONY: env up down logs backend-venv test-db seed-source demo demo-files test lint
+.PHONY: env up down logs backend-venv test-db seed-source demo demo-files test e2e screenshots lint frontend-check
 
 env:
 	@test -f .env || scripts/generate_env.sh
@@ -36,6 +36,18 @@ demo-files:
 
 test: env test-db
 	cd backend && TRUTHSPLIT_TEST_DATABASE_URL=$(TEST_DB) TRUTHSPLIT_TEST_SOURCE_URL=$(TEST_SOURCE) TRUTHSPLIT_TEST_SOURCE_ADMIN_URL=$(TEST_SOURCE_ADMIN) .venv/bin/pytest
+
+# End-to-end tests in the official Playwright image, against the running compose stack.
+e2e:
+	docker run --rm --network truthsplit_default -v "$(CURDIR)":/repo -v /repo/e2e/node_modules -w /repo/e2e -e E2E_BASE_URL=http://frontend:5173 \
+		mcr.microsoft.com/playwright:v1.49.1-jammy sh -c "npm ci --no-audit --no-fund && npx playwright test"
+
+screenshots:
+	docker run --rm --network truthsplit_default -v "$(CURDIR)":/repo -v /repo/e2e/node_modules -w /repo/e2e -e E2E_BASE_URL=http://frontend:5173 -e SCREENSHOTS=1 \
+		mcr.microsoft.com/playwright:v1.49.1-jammy sh -c "npm ci --no-audit --no-fund && npx playwright test screenshots"
+
+frontend-check:
+	docker run --rm -v "$(CURDIR)/frontend":/app -v /app/node_modules -w /app node:22-alpine sh -c "npm ci --no-audit --no-fund && npm run build && rm -rf dist"
 
 lint:
 	cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check .

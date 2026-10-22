@@ -9,6 +9,8 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 5173,
+    // "frontend" is the compose service name the end-to-end tests use to reach this server.
+    allowedHosts: ["frontend"],
     proxy: { "/api": target, "/health": target },
   },
 });

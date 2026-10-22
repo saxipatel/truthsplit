@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from app.adapters.files import IngestionError, UnsupportedFileError, read_table
 from app.api.deps import SessionDep, SettingsDep
 from app.db.imports import UploadTooLargeError, create_dataset, store_upload, upload_path
+from app.db.profile import profile_dataset
 from app.models import Dataset, DatasetRecord, FileUpload, ImportIssue
 from app.models.sources import FileType
 from app.normalization.values import format_cell, infer_type, is_empty
@@ -164,6 +165,13 @@ def get_dataset(dataset_id: uuid.UUID, session: SessionDep) -> Dataset:
 
 Offset = Annotated[int, Query(ge=0)]
 Limit = Annotated[int, Query(ge=1, le=1000)]
+
+
+@router.get("/datasets/{dataset_id}/profile")
+def dataset_profile(dataset_id: uuid.UUID, session: SessionDep) -> dict:
+    """Row, key, amount, refund, timestamp, currency, status and attribute statistics of the stored records."""
+    _get_dataset(session, dataset_id)
+    return profile_dataset(session, dataset_id)
 
 
 @router.get("/datasets/{dataset_id}/records", response_model=Page[RecordOut])

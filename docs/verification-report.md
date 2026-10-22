@@ -236,3 +236,87 @@ Simulation results against the manifest:
 - `adjust_mapping` is limited to file datasets.
 - Similarity weights are fixed judgement calls.
 - Audit actors are free-text names, because there is no authentication.
+
+## Milestone 7: frontend (2026-10-21)
+
+**Automated tests.**
+- Backend: 329 passed, 0 failed, 0 skipped, 1 warning (Starlette test-client deprecation). This includes 5 new report, settings and demo-endpoint tests.
+- End-to-end (`make e2e`, Playwright 1.49.1, Chromium, against the compose stack): 11 passed, 0 failed.
+- Frontend type check and production build: pass. The largest chunk is the lazily loaded chart bundle (388 kB, 107 kB gzipped); the initial bundle is 187 kB (61 kB gzipped).
+
+**What the end-to-end tests exercise.**
+- **Every page:** the seven pages render their heading with no console errors and no error alerts. At 375 × 812, every page and all five investigation tabs have no horizontal overflow.
+- **File investigation:**
+  1. Submitting empty shows the required-field messages.
+  2. Two CSVs are uploaded and previewed, the key column is guessed, and both import.
+  3. A definition is created inline; with the same definition on both sides, Metric DNA reports them identical.
+  4. The run shows a difference of +30.00, as the fixture implies.
+  5. The missing-keys finding expands to evidence naming K5.
+  6. Removing the exact duplicates shows a difference after of +10.00 and a gap closed of +20.00.
+  7. After a reload the stored difference is still +30.00 and the simulation is listed.
+  8. The HTML report downloads, and the JSON report has `delta` 30.0000 and one simulation.
+- **Database mode:** finance vs sales query snapshots for March show +155,997.39 (the manifest value) with an unexplained remainder of 0.00.
+- **Review:** a note persists across a reload.
+
+**Manual checks in the browser** (desktop, and a 375px viewport).
+- Demo A's breakdown shows +102,360.14, +56,224.00, −9,604.00 and +7,017.25.
+- A UI simulation (remove join copies, right side) on demo A showed 155,997.39 → 99,773.39, a gap closed of 56,224.00 and 244 rows, matching the manifest. The per-rule comparison table summed A's two cutoff findings to −2,586.75.
+
+**Defects found and fixed during this milestone.**
+- **Wrong totals in the What-if table:** two findings from the same rule were summed only when their amounts differed. Fixed with exact decimal addition.
+- **Ambiguous chart labels:** the two cutoff bars on demo A were both labelled "Query window"; they now use each finding's title.
+- **Overlapping labels at 375px:** a negative bar's label overlapped the axis labels and a positive one was clipped. Labels now sit at each bar's data end, padded axes use clean ticks, and narrow screens drop in-chart labels in favour of the table.
+- **Misleading legend:** "Unexplained remainder" appeared in the legend when there was none; legends now list only categories present.
+- **Large bundle:** the build warned about a 644 kB bundle; pages are now lazily loaded.
+- **Ambiguous stat tiles:** stat tiles had no accessible name, which also made them ambiguous for the tests; they are now labelled groups.
+
+**Limitations.**
+- No dark theme.
+- The compose stack serves the Vite dev server, not a production build.
+- The blueprint's "Simulations" and "Reports" are tabs inside an investigation rather than top-level pages, because both belong to one investigation.
+- No README screenshots yet (Milestone 8).
+- No CI workflow yet (Milestone 8).
+
+## Milestone 7: results-experience pass (2026-10-21)
+
+**Scope.** Reconciliation waterfall, evidence breakdown by status, before/after chart of saved simulations, Overview KPIs and recurring discrepancies, plain-language Metric DNA differences, dataset profiling, and separate evidence and review status. One backend addition: `GET /api/datasets/{id}/profile`.
+
+**Automated tests.**
+- Backend: 330 passed, 0 failed, 0 skipped, 1 warning (Starlette test-client deprecation), including a new profile test whose expected values were derived by hand from a fixture with duplicates, a negative amount, a zero, a missing amount, a row without a key and a rejected value.
+- Frontend: type check and production build pass.
+- End-to-end: 20 passed, 0 failed, 1 skipped (the screenshot capture, which runs only via `make screenshots`). The suite was run twice in a row with the same result.
+
+**Charts against independently calculated values.** Expected values come from `sample_data/manifest.json`, from the settlement CSV parsed in the test, or from the API, never from frontend code.
+
+- **Waterfall, demos A/B/C:** every step amount equals the manifest's contribution (for B, the mismatch row equals keying errors + unattributed fan-out, 5,518.00). Each running total equals the previous one plus the change (BigInt), and the last equals the manifest difference: +155,997.39, +3,255.50 and −159,249.32. Demo B by hand: 0 − 6,425.81 + 3,166.56 + 5,518.00 + 996.75 = +3,255.50.
+- **Evidence breakdown, demo B:** confirmed +2,258.75 (= difference − unexplained), suspected "not attributed", unexplained +996.75.
+- **Before/after chart:** one row per saved simulation, and the last row's values equal the API's.
+- **Dataset profile:** rows 2,882, amount sum 1,394,396.93, 394 refunded rows, 119 zero amounts and the first timestamp all match the settlement CSV.
+- **Overview KPIs:** fully explained, with remainder and formally resolved equal counts computed from the API list. Finding counts were confirmed in the browser: 10 confirmed, 2 suspected, 1 unexplained.
+
+**Edge cases seen in the browser.**
+- Demo C has only negative steps; the bars run leftward and the labels sit on the outer side.
+- Demo B has a positive remainder after a negative first step.
+- A simulation that widens the gap (+155,997.39 → +260,607.00) shows a negative "gap closed" in red.
+- A simulation with no change (align window) is drawn as a single point.
+- A simulation needing an unmapped column was refused and does not appear in the chart.
+- An investigation id that no longer exists shows "Investigation not found".
+
+**Mutation check.** Removing the unexplained-remainder step from the waterfall failed the demo B waterfall test only (A and C have no remainder). The code was restored and is identical to the source.
+
+**Defects found during this pass and fixed.**
+- Dataset details rendered inside a table cell pushed half the profile off-screen; they now render below the table.
+- The profile's time range was labelled UTC but shown in local time; it is now formatted in UTC.
+- "Filters differs" became "Filters differ".
+- Findings with no record-level evidence showed "0 rows"; the count is now omitted.
+- The Overview's "Latest" and "Unresolved" tables duplicated each other; it now shows "Recently resolved or archived" only when there are some.
+- `npm ci` on the macOS bind mount left duplicate `… 2` directories and failed every second run; `make e2e`, `make screenshots` and `make frontend-check` keep `node_modules` inside the container.
+
+**Measured.** Profiling a 100,000-row dataset took 0.81 s, then 0.40 s and 0.34 s (Apple M4, Docker).
+
+**Screenshots.** `docs/screenshots/01-10`, captured by Playwright from the running stack after resetting to the three demo investigations, two example metric definitions and three saved simulations on demo A.
+
+**Limitations.**
+- No dark theme.
+- On screens under 640px the in-chart value labels are hidden; the tables next to the charts carry the values.
+- The compose stack serves the Vite dev server.

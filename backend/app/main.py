@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, imports, investigations, memory, sources
+from app.api import health, imports, investigations, memory, sources, system
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 
@@ -22,6 +22,7 @@ def create_app() -> FastAPI:
     app.include_router(investigations.router)
     app.include_router(sources.router)
     app.include_router(memory.router)
+    app.include_router(system.router)
     return app
 
 

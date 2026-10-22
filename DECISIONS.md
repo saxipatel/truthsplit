@@ -388,3 +388,69 @@ Each entry records a decision made while building TruthSplit, the context for it
 **Context.** Found during Milestone 6 verification: mapping the amount to a text column produced a simulation where the right side was simply zero. It looked like a result, but it was an artefact of rejected rows.
 
 **Reason.** This follows the import policy (decision 6): rejected rows are never silently dropped. A simulation is a what-if, so a partial rejection may be intended, but the user has to be able to see it.
+
+## 34. Frontend without a data-fetching or state library
+
+**Decision.** Pages fetch through a small typed client (`src/api/client.ts`) and a `useApi` / `useAction` hook pair. There is no global store or query cache.
+
+**Alternatives.** TanStack Query; Redux.
+
+**Reason.** Every view is a read of server state followed by explicit actions that reload what they change. The data volume per view is small, and two short hooks keep loading, error and reload behaviour consistent without another dependency.
+
+**Trade-offs.** No request deduplication or background refetching. After an action, each page reloads the affected data explicitly.
+
+## 35. Money stays a decimal string in the UI
+
+**Decision.** Amounts are displayed from the API's decimal strings by string formatting (`lib/format.ts`). The one place that adds money in the browser, the What-if per-rule table, does exact decimal addition with BigInt. Charts convert to `Number` only for bar geometry.
+
+**Reason.** The backend guarantees exact `Decimal` results; showing them through IEEE floats could change displayed cents.
+
+## 36. Charts: validated palette, tables beside every chart
+
+**Decision.** Three charts only: the Difference Autopsy breakdown, What-if baseline vs simulated per rule, and recurring patterns. The breakdown colours bars by sign (blue raises the right side, red lowers it) and uses yellow for the unexplained remainder; this palette was checked with the dataviz palette validator. Every chart has a table with the exact values next to it, and narrow screens drop in-chart value labels rather than overlapping them.
+
+**Context.** Plain gray failed the validator's chroma floor as a category colour, so yellow (`#eda100`) is used for "unexplained". Its contrast warning is covered by visible labels on wide screens and by the table on all screens.
+
+**Consequences.** The Overview has stat tiles and tables, not a chart; a chart there would only decorate. There is no dark theme; that is a stated limitation.
+
+## 37. Dev server in compose; end-to-end tests in the Playwright image
+
+**Decision.** The compose `frontend` service runs the Vite dev server, which proxies `/api` and `/health` to the backend. Playwright runs in `mcr.microsoft.com/playwright:v1.49.1-jammy` on the compose network (`make e2e`), reaching the frontend as `frontend` (allowed in `vite.config.ts`).
+
+**Reason.** One origin for UI and API removes CORS from the browser path, and the pinned Playwright image needs no browser install on the host.
+
+**Trade-offs.** The dev server is not a production web server. Serving a static build behind a reverse proxy would be the production setup, and is outside this local-tool scope.
+
+## 38. Reconciliation waterfall from zero to the difference
+
+**Decision.** The Difference Autopsy chart is a horizontal waterfall. It starts at 0, shows each confirmed finding with an amount in attribution order as a floating bar from the running total before it to the one after it, then the unexplained remainder, and ends with a hollow bar from 0 to the difference. A table next to it lists each step's running total before, change and running total after, computed with exact decimal arithmetic. A banner appears if the totals do not end at the stored difference.
+
+**Alternatives.** A bridge from the left total to the right total; independent signed bars (the previous version).
+
+**Reason.** Starting at zero keeps the scale on the difference being explained; a left-to-right bridge puts million-sized totals next to thousand-sized causes. Floating bars show that the causes add up, which independent bars did not. The hollow total bar is distinguished by shape rather than a fourth colour: gray failed the palette validator's chroma floor.
+
+**Consequences.** Suspected findings never appear in the waterfall, because they have no amount. They are listed in the evidence breakdown.
+
+## 39. "Fully explained" is not "resolved"
+
+**Decision.** Every investigation view shows two separate labels.
+- **Evidence:** fully explained (the unexplained remainder is 0), unexplained remainder, or no difference. This is computed from stored totals.
+- **Review:** open, in review, resolved or archived. This is set by a person.
+
+**Reason.** A reconciliation can be fully explained and still need a decision (which definition is canonical), and a reviewer can formally close one that has a remainder. Blending the two would let "resolved" pass for "proven". An e2e test resolves demo B and checks that its evidence label still reads "Unexplained remainder".
+
+## 40. Dataset profiling by SQL aggregates on demand
+
+**Decision.** `GET /api/datasets/{id}/profile` computes row, key, duplicate, amount, refund, time-range, currency, status and attribute statistics with aggregate SQL over the stored records each time it is requested.
+
+**Alternatives.** Store a profile at import time; a profiling library.
+
+**Reason.** Datasets are immutable, so a live aggregate is always correct. It is a single indexed scan per dataset, and it needs no new storage or dependency.
+
+**Trade-offs.** It is recomputed on each request. Measured on 100,000 rows: 0.81 s on the first request, then 0.40 s and 0.34 s. The 250k-row limit was not measured.
+
+## 41. Saved simulations as a before → after dumbbell
+
+**Decision.** The What-if tab plots every saved simulation of the investigation as a dumbbell (before shade → after shade of one blue hue) on one axis with a zero line, numbered to match the table of saved simulations.
+
+**Reason.** All simulations start from the same stored baseline, so the chart answers "which correction closes the gap, and which widens it" at a glance. It uses only stored simulation results, so it shows what was actually run.

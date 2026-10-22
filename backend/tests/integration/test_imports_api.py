@@ -221,3 +221,48 @@ def test_rejected_csv_is_not_stored(client, db_session, tmp_path):
     assert upload(client, "header.csv", b"id,amount\n").status_code == 422
     assert db_session.scalar(select(func.count()).select_from(FileUpload)) == 0
     assert list((tmp_path / "uploads").iterdir()) == []
+
+
+def test_dataset_profile_matches_the_file(client):
+    data = (
+        b"id,amount,refund,ccy,at,status,region\n"
+        b"A,10.00,,USD,2026-03-01T10:00:00Z,paid,EU\n"
+        b"A,10.00,,USD,2026-03-01T10:00:00Z,paid,EU\n"  # exact duplicate of the row above
+        b"B,-5.50,2.00,USD,2026-03-05T10:00:00Z,refunded,US\n"
+        b"C,,,EUR,,paid,\n"
+        b",0,,USD,2026-03-09T10:00:00Z,void,EU\n"
+        b"D,oops,,USD,2026-03-02T10:00:00Z,paid,EU\n"
+    )
+    up = upload(client, "profile.csv", data).json()
+    mapping = {
+        "business_key": ["id"],
+        "amount": "amount",
+        "refund_amount": "refund",
+        "currency": "ccy",
+        "occurred_at": "at",
+        "status": "status",
+        "attributes": ["region"],
+    }
+    ds = client.post("/api/datasets", json={"upload_id": up["upload"]["id"], "mapping": mapping}).json()[
+        "dataset"
+    ]
+    p = client.get(f"/api/datasets/{ds['id']}/profile").json()
+    assert p["rows"] == 5
+    assert p["business_keys"] == {"distinct": 3, "rows_without_key": 1, "repeated_keys": 1}
+    assert p["exact_duplicate_rows"] == 1
+    assert p["amount"] == {
+        "values": 4,
+        "missing": 1,
+        "sum": "14.5000",
+        "min": "-5.5000",
+        "max": "10.0000",
+        "negative": 1,
+        "zero": 1,
+    }
+    assert p["refund"] == {"values": 1, "refunded_rows": 1, "sum": "2.0000"}
+    assert p["occurred_at"]["missing"] == 1 and p["occurred_at"]["first"].startswith("2026-03-01T10:00:00")
+    assert p["currencies"] == [{"value": "USD", "rows": 4}, {"value": "EUR", "rows": 1}]
+    assert p["statuses"][0] == {"value": "paid", "rows": 3}
+    assert p["attributes"] == [{"name": "region", "distinct_values": 2, "empty": 1}]
+    assert p["rejected_by_column"] == [{"column": "amount", "rows": 1}]
+    assert client.get("/api/datasets/00000000-0000-0000-0000-000000000000/profile").status_code == 404
