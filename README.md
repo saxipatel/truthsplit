@@ -172,15 +172,28 @@ Backend peak memory over the whole run: 824 MiB. Method, environment and limits 
 
 The full threat model, the test that covers each control, the scan results and the known limitations are in [docs/security.md](docs/security.md).
 
+### Security warnings
+
+- **No authentication, rate limiting or TLS.** TruthSplit is a single-user local tool and every port binds to 127.0.0.1. Do not expose it on a network without an authenticating reverse proxy that terminates TLS.
+- **The database role is the real guarantee.** Configure sources only with roles that cannot write. TruthSplit refuses to query a role that can, but that role's credentials would still be present in the environment.
+- **A role can change its own session defaults.** `ALTER ROLE <self> SET default_transaction_read_only = off` succeeds for any role. It grants no write access, and TruthSplit always runs read-only transactions.
+- **Local credentials are only as safe as `.env`.** Generate them with `scripts/generate_env.sh`; do not reuse the placeholder values in `.env.example`.
+- **The upstream PostgreSQL image.** Trivy reports Go standard-library advisories in the `gosu` binary of `postgres:16-alpine`. It runs only at container start to drop privileges and makes no network connections. Accepted; see [docs/security.md](docs/security.md).
+- **Image scanning is manual.** Trivy is not part of CI; gitleaks, bandit, pip-audit and npm audit are.
+
 ## Limitations
 
 - **Single-user local tool.** No authentication or rate limiting; do not expose it beyond localhost without an authenticating proxy and TLS.
 - **Single currency per comparison.** No FX conversion; mixed currencies are refused rather than summed.
-- **Supported formats.** PostgreSQL is the only database connector, and new registered queries are added in code (`backend/app/adapters/registered_queries.py`), not through the UI.
+- **Database connectors.** PostgreSQL is the only one, and new registered queries are added in code (`backend/app/adapters/registered_queries.py`), not through the UI.
 - **Size limits.** Up to 250,000 rows per dataset (`TRUTHSPLIT_MAX_ROWS`) and 25 MB per upload. Investigations run in memory in the API process.
 - **Join amplification needs metadata.** It is confirmed only when the query declares a 1:N join; otherwise it is reported as suspected, without an amount.
 - **Similarity is rule-based.** Points come from shared confirmed or suspected rules, metric names, sources and Metric DNA differences; it is not a learned model.
 - **Snapshots are not refreshed automatically.** Use the freshness check.
+- **Benchmarks are from one machine.** They were measured on an Apple M4 laptop with Docker Desktop and a single API worker; concurrency was not tested. See [docs/benchmarks.md](docs/benchmarks.md).
+- **Builds are not fully pinned.** Python dependencies are lower bounds without a lock file, and Docker base images are referenced by tag, not digest; the frontend and e2e npm dependencies are locked.
+- **Recharts 2.x is deprecated upstream.** No advisory affects it today, but an upgrade to v3 is pending.
+- **CI has not yet run on GitHub.** The workflow passes actionlint and every step was run locally.
 - **No dark theme.**
 
 ## Documentation
