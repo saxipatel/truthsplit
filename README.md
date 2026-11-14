@@ -214,7 +214,7 @@ The full threat model, the test that covers each control, the scan results and t
 | [docs/benchmarks.md](docs/benchmarks.md) | Benchmark method, environment and measured results |
 | [sample_data/README.md](sample_data/README.md) | How the synthetic demo data and its expected results are produced |
 | [DECISIONS.md](DECISIONS.md) | Design decisions, alternatives and trade-offs |
-| [LEARNING_GUIDE.md](LEARNING_GUIDE.md) | Walkthrough of the code, a reading order and exercises |
+| [LEARNING_GUIDE.md](docs/LEARNING_GUIDE.md) | Walkthrough of the code, a reading order and exercises |
 
 ## Project structure
 
